@@ -3858,10 +3858,26 @@ class PaymentController
         if ($meterDetails !== []) {
             $waterFee = 0.0;
             $electricFee = 0.0;
+            $meterFeeTotal = 0.0;
+            $typeUsageMap = [];
+            $typeFeeMap = [];
             $rowsHtml = '';
             foreach ($meterDetails as $row) {
                 $type = (string) ($row['meter_type'] ?? 'water');
                 $lineAmount = (float) ($row['line_amount'] ?? 0);
+                $usageAmount = (float) ($row['usage_amount'] ?? 0);
+                $unitPrice = (float) ($row['unit_price'] ?? 0);
+                $meterFeeTotal += $lineAmount;
+
+                if (!isset($typeUsageMap[$type])) {
+                    $typeUsageMap[$type] = 0.0;
+                }
+                if (!isset($typeFeeMap[$type])) {
+                    $typeFeeMap[$type] = 0.0;
+                }
+                $typeUsageMap[$type] += $usageAmount;
+                $typeFeeMap[$type] += $lineAmount;
+
                 if ($type === 'water') {
                     $waterFee += $lineAmount;
                 } else {
@@ -3874,9 +3890,10 @@ class PaymentController
                     . '<td>' . htmlspecialchars((string) ($row['meter_name_snapshot'] ?? '-'), ENT_QUOTES) . '</td>'
                     . '<td class="text-end">' . number_format((float) ($row['previous_reading'] ?? 0), 2) . '</td>'
                     . '<td class="text-end">' . number_format((float) ($row['current_reading'] ?? 0), 2) . '</td>'
-                    . '<td class="text-end">' . number_format((float) ($row['usage_amount'] ?? 0), 2) . '</td>'
-                    . '<td class="text-end">' . number_format((float) ($row['unit_price'] ?? 0), 4) . '</td>'
+                    . '<td class="text-end">' . number_format($usageAmount, 2) . '</td>'
+                    . '<td class="text-end">' . number_format($unitPrice, 4) . '</td>'
                     . '<td class="text-end">¥' . number_format($lineAmount, 2) . '</td>'
+                    . '<td class="text-end">' . number_format($usageAmount, 2) . ' × ¥' . number_format($unitPrice, 4) . ' = ¥' . number_format($lineAmount, 2) . '</td>'
                     . '</tr>';
             }
 
@@ -3885,12 +3902,26 @@ class PaymentController
                 $rentAmount = (float) (($billDetails['formula']['rent_amount'] ?? $rentAmount));
             }
 
+            $payableRows = '<li><strong>固定月租金：</strong>¥' . number_format($rentAmount, 2) . '</li>';
+            foreach ($typeFeeMap as $meterType => $fee) {
+                $label = $this->meterTypeLabel((string) $meterType);
+                $usage = (float) ($typeUsageMap[$meterType] ?? 0);
+                $payableRows .= '<li><strong>' . htmlspecialchars($label, ENT_QUOTES) . '费用：</strong>¥' . number_format($fee, 2)
+                    . '（累计用量 ' . number_format($usage, 2) . '）</li>';
+            }
+            $payableRows .= '<li><strong>滞纳金：</strong>¥' . number_format((float) $payment['late_fee'], 2) . '</li>';
+            $payableRows .= '<li><strong>折扣抵扣：</strong>-¥' . number_format((float) $payment['discount'], 2) . '</li>';
+
             $formulaBlock = '<hr>'
                 . '<h5 class="mb-3">本期账单明细（多表计）</h5>'
                 . '<p><strong>固定月租金：</strong>¥' . number_format($rentAmount, 2) . '</p>'
-                . '<div class="table-responsive"><table class="table table-sm table-bordered align-middle"><thead><tr><th>类型</th><th>表计编号</th><th>表计名称</th><th class="text-end">上月读数</th><th class="text-end">本月读数</th><th class="text-end">用量</th><th class="text-end">单价</th><th class="text-end">费用</th></tr></thead><tbody>' . $rowsHtml . '</tbody></table></div>'
+                . '<div class="table-responsive"><table class="table table-sm table-bordered align-middle"><thead><tr><th>类型</th><th>表计编号</th><th>表计名称</th><th class="text-end">上月读数</th><th class="text-end">本月读数</th><th class="text-end">用量</th><th class="text-end">单价</th><th class="text-end">费用</th><th class="text-end">计算公式</th></tr></thead><tbody>' . $rowsHtml . '</tbody></table></div>'
                 . '<p><strong>水费合计：</strong>¥' . number_format($waterFee, 2) . '</p>'
-                . '<p><strong>电费合计：</strong>¥' . number_format($electricFee, 2) . '</p>';
+                . '<p><strong>电费合计：</strong>¥' . number_format($electricFee, 2) . '</p>'
+                . '<hr>'
+                . '<h6 class="mb-2">应付构成</h6>'
+                . '<ul class="mb-2">' . $payableRows . '</ul>'
+                . '<p class="mb-0"><strong>应收计算公式：</strong>¥' . number_format($rentAmount, 2) . ' + ¥' . number_format($meterFeeTotal, 2) . ' + ¥' . number_format((float) $payment['late_fee'], 2) . ' - ¥' . number_format((float) $payment['discount'], 2) . ' = <strong>¥' . number_format($totalDue, 2) . '</strong></p>';
         } elseif ($billDetails !== null && isset($billDetails['formula']) && is_array($billDetails['formula'])) {
             $f = $billDetails['formula'];
             $waterPrevious = (float) ($f['water_previous'] ?? 0);
@@ -3912,7 +3943,11 @@ class PaymentController
                 . '<p><strong>总用水量：</strong>' . number_format($waterCurrent, 2) . '（上月：' . number_format($waterPrevious, 2) . '，本月：' . number_format($waterCurrent, 2) . '）</p>'
                 . '<p><strong>当月水量：</strong>' . number_format($waterUsage, 2) . ' × 单价 ¥' . number_format($waterUnitPrice, 2) . ' = 水费 ¥' . number_format($waterFee, 2) . '</p>'
                 . '<p><strong>总用电量：</strong>' . number_format($electricCurrent, 2) . '（上月：' . number_format($electricPrevious, 2) . '，本月：' . number_format($electricCurrent, 2) . '）</p>'
-                . '<p><strong>当月电量：</strong>' . number_format($electricUsage, 2) . ' × 单价 ¥' . number_format($electricUnitPrice, 2) . ' = 电费 ¥' . number_format($electricFee, 2) . '</p>';
+                . '<p><strong>当月电量：</strong>' . number_format($electricUsage, 2) . ' × 单价 ¥' . number_format($electricUnitPrice, 2) . ' = 电费 ¥' . number_format($electricFee, 2) . '</p>'
+                . '<hr>'
+                . '<h6 class="mb-2">应付构成</h6>'
+                . '<ul class="mb-2"><li><strong>固定月租金：</strong>¥' . number_format($rentAmount, 2) . '</li><li><strong>水费：</strong>¥' . number_format($waterFee, 2) . '</li><li><strong>电费：</strong>¥' . number_format($electricFee, 2) . '</li><li><strong>滞纳金：</strong>¥' . number_format((float) $payment['late_fee'], 2) . '</li><li><strong>折扣抵扣：</strong>-¥' . number_format((float) $payment['discount'], 2) . '</li></ul>'
+                . '<p class="mb-0"><strong>应收计算公式：</strong>¥' . number_format($rentAmount, 2) . ' + ¥' . number_format($waterFee, 2) . ' + ¥' . number_format($electricFee, 2) . ' + ¥' . number_format((float) $payment['late_fee'], 2) . ' - ¥' . number_format((float) $payment['discount'], 2) . ' = <strong>¥' . number_format($totalDue, 2) . '</strong></p>';
         }
 
         $recordingForm = '';
