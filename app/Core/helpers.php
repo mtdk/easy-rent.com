@@ -370,6 +370,9 @@ if (!function_exists('app_unified_navbar')) {
         $items = [
             ['key' => 'dashboard', 'label' => '仪表板', 'icon' => 'bi-speedometer2', 'href' => '/dashboard', 'admin_only' => false],
             ['key' => 'users', 'label' => '用户管理', 'icon' => 'bi-people-fill', 'href' => '/users', 'admin_only' => true],
+            ['key' => 'settings', 'label' => '系统设置', 'icon' => 'bi-sliders2', 'href' => '/settings', 'admin_only' => true],
+            ['key' => 'api_management', 'label' => 'API管理', 'icon' => 'bi-cloud-check-fill', 'href' => '/api-tokens', 'admin_only' => true],
+            ['key' => 'properties', 'label' => '房产管理', 'icon' => 'bi-house-heart-fill', 'href' => '/properties', 'admin_only' => false],
             // 支持租户管理所有相关路由高亮
             ['key' => 'tenants', 'label' => '租户管理', 'icon' => 'bi-person-vcard-fill', 'href' => '/admin/tenants', 'admin_only' => false, 'landlord_only' => true, 'active_patterns' => [
                 '/admin/tenants',
@@ -379,9 +382,6 @@ if (!function_exists('app_unified_navbar')) {
                 '/admin/tenants/[0-9]+/delete',
                 '/admin/tenants/[0-9]+/cohabitants',
             ]],
-            ['key' => 'settings', 'label' => '系统设置', 'icon' => 'bi-sliders2', 'href' => '/settings', 'admin_only' => true],
-            ['key' => 'api_management', 'label' => 'API管理', 'icon' => 'bi-cloud-check-fill', 'href' => '/api-tokens', 'admin_only' => true],
-            ['key' => 'properties', 'label' => '房产管理', 'icon' => 'bi-house-heart-fill', 'href' => '/properties', 'admin_only' => false],
             ['key' => 'contracts', 'label' => '合同管理', 'icon' => 'bi-file-earmark-text-fill', 'href' => '/contracts', 'admin_only' => false],
             ['key' => 'payments', 'label' => '账单与收款', 'icon' => 'bi-cash-stack', 'href' => '/payments', 'admin_only' => false],
             ['key' => 'expenses', 'label' => '支出管理', 'icon' => 'bi-wrench-adjustable-circle-fill', 'href' => '/expenses', 'admin_only' => false],

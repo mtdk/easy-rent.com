@@ -426,7 +426,17 @@ class PaymentController
             }
         }
 
-        $rentAmount = (float) $contract['rent_amount'];
+        // 读取用户输入的固定月租金，若未提供则使用合同中的租金
+        $postedRentAmount = isset($_POST['rent_amount']) ? (float) $_POST['rent_amount'] : null;
+        if ($postedRentAmount !== null && $postedRentAmount >= 0) {
+            $rentAmount = $postedRentAmount;
+        } else {
+            $rentAmount = (float) $contract['rent_amount'];
+        }
+        // 确保租金非负
+        if ($rentAmount < 0) {
+            $rentAmount = 0.0;
+        }
         $amountDue = $rentAmount + $waterFee + $electricFee;
 
         $dueDate = $this->buildDueDate($period, (int) $contract['payment_day']);
@@ -552,8 +562,9 @@ class PaymentController
             throw HttpException::badRequest('折扣金额不能大于应收合计（应付+滞纳金）');
         }
 
+        // 如果折扣大于0但未选择抵扣来源，默认设为“其他”
         if ($discount > 0 && $discountSource === '') {
-            throw HttpException::badRequest('存在折扣抵扣时，请选择抵扣来源');
+            $discountSource = 'other';
         }
 
         $totalDue = max(0.0, $grossDue - $discount);
@@ -3816,7 +3827,7 @@ class PaymentController
             . '<div class="row g-3">'
             . '<div class="col-md-6"><label class="form-label">合同</label><select class="form-select" name="contract_id" ' . $contractSwitchScript . ' required>' . $contractOptions . '</select></div>'
             . '<div class="col-md-3"><label class="form-label">账单周期</label><input class="form-control" type="month" name="period" value="' . htmlspecialchars($period) . '" required></div>'
-            . '<div class="col-md-3"><label class="form-label">固定月租金</label><input class="form-control" type="number" step="0.01" id="rentAmount" value="' . number_format($rentAmount, 2, '.', '') . '" disabled></div>'
+            . '<div class="col-md-3"><label class="form-label">固定月租金</label><input class="form-control" type="number" step="0.01" id="rentAmount" name="rent_amount" value="' . number_format($rentAmount, 2, '.', '') . '"></div>'
             . '<div class="col-12"><hr class="my-1"></div>'
             . '<div class="col-12">'
             . '<div class="d-flex justify-content-between align-items-center mb-2"><label class="form-label mb-0">计量表明细（支持一套房多个表计，如水/电/气）</label><button type="button" class="btn btn-sm btn-outline-primary" id="addMeterRowBtn">新增表计</button></div>'
@@ -3913,7 +3924,7 @@ class PaymentController
                     . '（累计用量 ' . number_format($usage, 2) . '）</li>';
             }
             $payableRows .= '<li><strong>滞纳金：</strong>¥' . number_format((float) $payment['late_fee'], 2) . '</li>';
-            $payableRows .= '<li><strong>折扣抵扣：</strong>-¥' . number_format((float) $payment['discount'], 2) . '</li>';
+            $payableRows .= '<li id="discount-li"><strong>折扣抵扣：</strong>-¥<span id="discount-amount">' . number_format((float) $payment['discount'], 2) . '</span></li>';
 
             $formulaBlock = '<hr>'
                 . '<h5 class="mb-3">本期账单明细（多表计）</h5>'
@@ -3923,8 +3934,8 @@ class PaymentController
                 . '<p><strong>电费合计：</strong>¥' . number_format($electricFee, 2) . '</p>'
                 . '<hr>'
                 . '<h6 class="mb-2">应付构成</h6>'
-                . '<ul class="mb-2">' . $payableRows . '</ul>'
-                . '<p class="mb-0"><strong>应收计算公式：</strong>¥' . number_format($rentAmount, 2) . ' + ¥' . number_format($meterFeeTotal, 2) . ' + ¥' . number_format((float) $payment['late_fee'], 2) . ' - ¥' . number_format((float) $payment['discount'], 2) . ' = <strong>¥' . number_format($totalDue, 2) . '</strong></p>';
+                . '<ul class="mb-2" id="payable-constituents" data-rent="' . number_format($rentAmount, 2) . '" data-meter-total="' . number_format($meterFeeTotal, 2) . '" data-late-fee="' . number_format((float) $payment['late_fee'], 2) . '">' . $payableRows . '</ul>'
+                . '<p class="mb-0"><strong>应收计算公式：</strong><span id="formula-rent">¥' . number_format($rentAmount, 2) . '</span> + <span id="formula-meter">¥' . number_format($meterFeeTotal, 2) . '</span> + <span id="formula-late">¥' . number_format((float) $payment['late_fee'], 2) . '</span> - <span id="formula-discount">¥' . number_format((float) $payment['discount'], 2) . '</span> = <strong id="formula-total">¥' . number_format($totalDue, 2) . '</strong></p>';
         } elseif ($billDetails !== null && isset($billDetails['formula']) && is_array($billDetails['formula'])) {
             $f = $billDetails['formula'];
             $waterPrevious = (float) ($f['water_previous'] ?? 0);
@@ -3949,8 +3960,8 @@ class PaymentController
                 . '<p><strong>当月电量：</strong>' . number_format($electricUsage, 2) . ' × 单价 ¥' . number_format($electricUnitPrice, 2) . ' = 电费 ¥' . number_format($electricFee, 2) . '</p>'
                 . '<hr>'
                 . '<h6 class="mb-2">应付构成</h6>'
-                . '<ul class="mb-2"><li><strong>固定月租金：</strong>¥' . number_format($rentAmount, 2) . '</li><li><strong>水费：</strong>¥' . number_format($waterFee, 2) . '</li><li><strong>电费：</strong>¥' . number_format($electricFee, 2) . '</li><li><strong>滞纳金：</strong>¥' . number_format((float) $payment['late_fee'], 2) . '</li><li><strong>折扣抵扣：</strong>-¥' . number_format((float) $payment['discount'], 2) . '</li></ul>'
-                . '<p class="mb-0"><strong>应收计算公式：</strong>¥' . number_format($rentAmount, 2) . ' + ¥' . number_format($waterFee, 2) . ' + ¥' . number_format($electricFee, 2) . ' + ¥' . number_format((float) $payment['late_fee'], 2) . ' - ¥' . number_format((float) $payment['discount'], 2) . ' = <strong>¥' . number_format($totalDue, 2) . '</strong></p>';
+                . '<ul class="mb-2" id="payable-constituents" data-rent="' . number_format($rentAmount, 2) . '" data-water="' . number_format($waterFee, 2) . '" data-electric="' . number_format($electricFee, 2) . '" data-late-fee="' . number_format((float) $payment['late_fee'], 2) . '"><li><strong>固定月租金：</strong>¥' . number_format($rentAmount, 2) . '</li><li><strong>水费：</strong>¥' . number_format($waterFee, 2) . '</li><li><strong>电费：</strong>¥' . number_format($electricFee, 2) . '</li><li><strong>滞纳金：</strong>¥' . number_format((float) $payment['late_fee'], 2) . '</li><li id="discount-li"><strong>折扣抵扣：</strong>-¥<span id="discount-amount">' . number_format((float) $payment['discount'], 2) . '</span></li></ul>'
+                . '<p class="mb-0"><strong>应收计算公式：</strong><span id="formula-rent">¥' . number_format($rentAmount, 2) . '</span> + <span id="formula-water">¥' . number_format($waterFee, 2) . '</span> + <span id="formula-electric">¥' . number_format($electricFee, 2) . '</span> + <span id="formula-late">¥' . number_format((float) $payment['late_fee'], 2) . '</span> - <span id="formula-discount">¥' . number_format((float) $payment['discount'], 2) . '</span> = <strong id="formula-total">¥' . number_format($totalDue, 2) . '</strong></p>';
         }
 
         $recordingForm = '';
@@ -3995,8 +4006,39 @@ class PaymentController
             . '<p><strong>未收余额：</strong>¥' . number_format($unpaidAmount, 2) . '</p>'
             . '<p><strong>支付日期：</strong>' . htmlspecialchars((string) ($payment['paid_date'] ?? '-')) . '</p>'
             . '<p><strong>状态：</strong>' . $this->paymentStatusBadge((string) $payment['payment_status']) . '</p>'
-            . $formulaBlock
             . $recordingForm
+            . $formulaBlock
+            . '<script>
+            (function() {
+                const discountInput = document.querySelector(\'input[name="discount"]\');
+                if (!discountInput) return;
+                const constituents = document.getElementById(\'payable-constituents\');
+                if (!constituents) return;
+                const rent = parseFloat(constituents.dataset.rent) || 0;
+                let meterTotal = parseFloat(constituents.dataset.meterTotal) || 0;
+                if (meterTotal === 0) {
+                    const water = parseFloat(constituents.dataset.water) || 0;
+                    const electric = parseFloat(constituents.dataset.electric) || 0;
+                    meterTotal = water + electric;
+                }
+                const lateFee = parseFloat(constituents.dataset.lateFee) || 0;
+                function updateDiscount() {
+                    const discount = parseFloat(discountInput.value) || 0;
+                    // 更新折扣显示
+                    const discountAmountEl = document.getElementById(\'discount-amount\');
+                    if (discountAmountEl) discountAmountEl.textContent = discount.toFixed(2);
+                    const formulaDiscountEl = document.getElementById(\'formula-discount\');
+                    if (formulaDiscountEl) formulaDiscountEl.textContent = \'¥\' + discount.toFixed(2);
+                    // 计算总金额
+                    const total = rent + meterTotal + lateFee - discount;
+                    const totalEl = document.getElementById(\'formula-total\');
+                    if (totalEl) totalEl.textContent = \'¥\' + total.toFixed(2);
+                }
+                discountInput.addEventListener(\'input\', updateDiscount);
+                // 初始化
+                updateDiscount();
+            })();
+            </script>'
             . '<div class="mt-3 d-flex gap-2"><a class="btn btn-secondary" href="/payments">返回账单列表</a><button class="btn btn-outline-primary" onclick="window.print()">打印收据</button></div>'
             . '</div></div></div></body></html>';
     }

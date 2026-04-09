@@ -8,6 +8,7 @@ use App\Models\TenantCohabitant;
 
 require_once APP_PATH . '/Views/tenantListTemplate.php';
 require_once APP_PATH . '/Views/tenantFormTemplate.php';
+require_once APP_PATH . '/Views/tenantShowTemplate.php';
 
 class TenantAdminController
 {
@@ -50,13 +51,24 @@ class TenantAdminController
         return Response::html(tenantFormTemplate('新建租户', '/admin/tenants', 'POST'));
     }
 
+    // 查看租户详情
+    public function show(int $id): Response
+    {
+        $tenant = Tenant::findById($id);
+        if (!$tenant) throw HttpException::notFound('租户不存在');
+        $cohabitants = TenantCohabitant::findByTenantId($id);
+        $history = \App\Models\TenantStay::allByTenant($id);
+        return Response::html(tenantShowTemplate($tenant, $cohabitants, $history));
+    }
+
     // 编辑租户表单
     public function edit(int $id): Response
     {
         $tenant = Tenant::findById($id);
         if (!$tenant) throw HttpException::notFound('租户不存在');
         $cohabitants = TenantCohabitant::findByTenantId($id);
-        return Response::html(tenantFormTemplate('编辑租户', "/admin/tenants/$id", 'POST', $tenant, $cohabitants));
+        $history = \App\Models\TenantStay::allByTenant($id);
+        return Response::html(tenantFormTemplate('编辑租户', "/admin/tenants/$id", 'POST', $tenant, $cohabitants, $history));
     }
 
     // 保存新建租户
@@ -77,11 +89,10 @@ class TenantAdminController
         return Response::redirect('/admin/tenants');
     }
 
-    // 删除租户
+    // 删除租户（禁止删除）
     public function delete(int $id): Response
     {
-        Tenant::delete($id);
-        return Response::redirect('/admin/tenants');
+        throw HttpException::badRequest('租户信息不允许删除');
     }
 
     // 新建/编辑共同居住人
@@ -98,11 +109,10 @@ class TenantAdminController
         return Response::redirect("/admin/tenants/$tenantId/edit");
     }
 
-    // 删除共同居住人
+    // 删除共同居住人（禁止删除）
     public function deleteCohabitant(int $tenantId, int $id): Response
     {
-        TenantCohabitant::delete($id);
-        return Response::redirect("/admin/tenants/$tenantId/edit");
+        throw HttpException::badRequest('共同居住人信息不允许删除');
     }
 
     // ...模板和输入解析方法略...

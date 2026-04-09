@@ -731,6 +731,12 @@ class Router
      */
     public function registerDefaultRoutes(): void
     {
+        // favicon.ico 返回空内容，避免404错误
+        $this->get('/favicon.ico', function() {
+            header('HTTP/1.1 204 No Content');
+            exit;
+        });
+
         // 首页
         $this->get('/', 'HomeController@index', 'home');
         
@@ -749,6 +755,7 @@ class Router
             $router->get('/admin/tenants', 'TenantAdminController@index');
             $router->get('/admin/tenants/create', 'TenantAdminController@create');
             $router->post('/admin/tenants', 'TenantAdminController@store');
+            $router->get('/admin/tenants/{id}', 'TenantAdminController@show');
             $router->get('/admin/tenants/{id}/edit', 'TenantAdminController@edit');
             $router->post('/admin/tenants/{id}', 'TenantAdminController@update');
             $router->post('/admin/tenants/{id}/delete', 'TenantAdminController@delete');
@@ -756,6 +763,7 @@ class Router
             $router->post('/admin/tenants/{tenantId}/cohabitants/{id}/delete', 'TenantAdminController@deleteCohabitant');
             $router->post('/admin/tenants/{tenantId}/cohabitants/{id}/moveout', 'TenantAdminController@moveOutCohabitant');
             $router->post('/admin/tenants/{id}/moveout', 'TenantAdminController@moveOut');
+            $router->post('/admin/tenants/{id}/restore', 'TenantAdminController@restore');
             // 仪表板
             $router->get('/dashboard', 'DashboardController@index', 'dashboard');
             $router->get('/profile', 'UserController@profile', 'profile');

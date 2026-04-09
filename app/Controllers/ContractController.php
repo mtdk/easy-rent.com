@@ -147,7 +147,7 @@ class ContractController
     
     /**
      * 显示创建合同表单
-     * 
+     *
      * @return Response 响应对象
      */
     public function create(): Response
@@ -156,6 +156,7 @@ class ContractController
         $this->assertCreatorPermission();
 
         $properties = $this->getPropertyOptions(auth()->user(), auth()->isAdmin());
+        $tenants = db()->fetchAll('SELECT id, name, phone FROM tenants WHERE status = ? ORDER BY name', ['在住']);
 
         return Response::html($this->contractFormTemplate('创建合同', '/contracts', 'POST', [
             'property_id' => '',
@@ -169,7 +170,7 @@ class ContractController
             'payment_method' => 'bank_transfer',
             'contract_status' => 'pending',
             'special_terms' => ''
-        ], $properties));
+        ], $properties, $tenants));
     }
     
     /**
@@ -417,7 +418,7 @@ class ContractController
     
     /**
      * 显示编辑合同表单
-     * 
+     *
      * @param int $id 合同ID
      * @return Response 响应对象
      */
@@ -432,8 +433,9 @@ class ContractController
 
         $this->assertContractManagePermission($contract);
         $properties = $this->getPropertyOptions(auth()->user(), auth()->isAdmin());
+        $tenants = db()->fetchAll('SELECT id, name, phone FROM tenants WHERE status = ? ORDER BY name', ['在住']);
 
-        return Response::html($this->contractFormTemplate('编辑合同', '/contracts/' . $id, 'PUT', $contract, $properties));
+        return Response::html($this->contractFormTemplate('编辑合同', '/contracts/' . $id, 'PUT', $contract, $properties, $tenants));
     }
     
     /**
@@ -1032,7 +1034,7 @@ class ContractController
             . '</tr></thead><tbody>' . $rows . '</tbody></table></div></div></div></body></html>';
     }
 
-    private function contractFormTemplate(string $title, string $action, string $method, array $contract, array $properties): string
+    private function contractFormTemplate(string $title, string $action, string $method, array $contract, array $properties, array $tenants = []): string
     {
         $methodField = $method === 'PUT' ? '<input type="hidden" name="_method" value="PUT">' : '';
         $alerts = $this->renderFlashAlerts();
@@ -1069,10 +1071,18 @@ class ContractController
             $propertyOptions .= '<option value="' . (int) $p['id'] . '" data-monthly-rent="' . htmlspecialchars($monthlyRent) . '"' . $selected . '>' . htmlspecialchars((string) $p['property_name']) . '</option>';
         }
 
+        $tenantOptions = '<option value="">请选择租客</option>';
+        foreach ($tenants as $tenant) {
+            $selected = $tenantName === (string) $tenant['name'] ? ' selected' : '';
+            $phone = htmlspecialchars((string) ($tenant['phone'] ?? ''));
+            $tenantOptions .= '<option value="' . htmlspecialchars((string) $tenant['name']) . '" data-phone="' . $phone . '"' . $selected . '>' . htmlspecialchars((string) $tenant['name']) . '</option>';
+        }
+
         $rentAutofillScript = '';
         if ($isCreateForm) {
             $rentAutofillScript = '<script>(function(){const propertySelect=document.querySelector("select[name=\"property_id\"]");const rentInput=document.querySelector("input[name=\"rent_amount\"]");if(!propertySelect||!rentInput){return;}const applyRent=function(force){const selected=propertySelect.options[propertySelect.selectedIndex];if(!selected){return;}const monthlyRent=selected.getAttribute("data-monthly-rent")||"";if(monthlyRent===""){return;}const current=(rentInput.value||"").trim();const canOverwrite=force||current===""||current==="0"||current==="0.0"||current==="0.00";if(canOverwrite){rentInput.value=monthlyRent;}};applyRent(false);propertySelect.addEventListener("change",function(){applyRent(true);});})();</script>';
         }
+        $tenantPhoneAutofillScript = '<script>(function(){const tenantSelect=document.querySelector("select[name=\"tenant_name\"]");const phoneInput=document.querySelector("input[name=\"tenant_phone\"]");if(!tenantSelect||!phoneInput){return;}tenantSelect.addEventListener("change",function(){const selectedOption=this.options[this.selectedIndex];const phone=selectedOption.getAttribute("data-phone")||"";phoneInput.value=phone;});})();</script>';
 
         return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>'
             . htmlspecialchars($title)
@@ -1084,11 +1094,11 @@ class ContractController
             . '<input type="hidden" name="_token" value="' . csrf_token() . '">'
             . '<div class="row">'
                 . '<div class="col-md-6 mb-3"><label class="form-label">房产</label><select class="form-select' . ($propertyIdError !== '' ? ' is-invalid' : '') . '" name="property_id" required>' . $propertyOptions . '</select>' . $this->errorFeedbackHtml($propertyIdError) . '</div>'
-                . '<div class="col-md-6 mb-3"><label class="form-label">租客姓名</label><input class="form-control' . ($tenantNameError !== '' ? ' is-invalid' : '') . '" name="tenant_name" placeholder="例如：张三" title="请填写租客真实姓名" value="' . htmlspecialchars($tenantName) . '" required>' . $this->errorFeedbackHtml($tenantNameError) . '</div>'
+                . '<div class="col-md-6 mb-3"><label class="form-label">租客姓名</label><select class="form-select' . ($tenantNameError !== '' ? ' is-invalid' : '') . '" name="tenant_name" required>' . $tenantOptions . '</select>' . $this->errorFeedbackHtml($tenantNameError) . '</div>'
                 . '<div class="col-md-6 mb-3"><label class="form-label">租客电话</label><input class="form-control' . ($tenantPhoneError !== '' ? ' is-invalid' : '') . '" name="tenant_phone" placeholder="例如：13800138000" title="手机号格式：11 位中国大陆手机号" value="' . htmlspecialchars($tenantPhone) . '">' . $this->errorFeedbackHtml($tenantPhoneError) . '</div>'
                 . '<div class="col-md-6 mb-3"><label class="form-label">租客邮箱</label><input type="email" class="form-control' . ($tenantEmailError !== '' ? ' is-invalid' : '') . '" name="tenant_email" placeholder="例如：tenant@example.com" title="请输入有效邮箱地址" value="' . htmlspecialchars($tenantEmail) . '">' . $this->errorFeedbackHtml($tenantEmailError) . '</div>'
-                . '<div class="col-md-6 mb-3"><label class="form-label">开始日期</label><input type="date" class="form-control' . ($startDateError !== '' ? ' is-invalid' : '') . '" name="start_date" value="' . htmlspecialchars($startDate) . '" required>' . $this->errorFeedbackHtml($startDateError) . '</div>'
-                . '<div class="col-md-6 mb-3"><label class="form-label">结束日期</label><input type="date" class="form-control' . ($endDateError !== '' ? ' is-invalid' : '') . '" name="end_date" value="' . htmlspecialchars($endDate) . '" required>' . $this->errorFeedbackHtml($endDateError) . '</div>'
+                . '<div class="col-md-6 mb-3"><label class="form-label">开始日期</label><input type="date" class="form-control' . ($startDateError !== '' ? ' is-invalid' : '') . '" name="start_date" value="' . htmlspecialchars($startDate) . '" placeholder="年/月/日" title="请选择日期（年/月/日）" required>' . $this->errorFeedbackHtml($startDateError) . '</div>'
+                . '<div class="col-md-6 mb-3"><label class="form-label">结束日期</label><input type="date" class="form-control' . ($endDateError !== '' ? ' is-invalid' : '') . '" name="end_date" value="' . htmlspecialchars($endDate) . '" placeholder="年/月/日" title="请选择日期（年/月/日）" required>' . $this->errorFeedbackHtml($endDateError) . '</div>'
                 . '<div class="col-md-4 mb-3"><label class="form-label">月租</label><input type="number" step="0.01" min="0" class="form-control' . ($rentAmountError !== '' ? ' is-invalid' : '') . '" name="rent_amount" placeholder="例如：4200.00" title="月租不能小于 0" value="' . htmlspecialchars($rentAmount) . '" required>' . $this->errorFeedbackHtml($rentAmountError) . '</div>'
                 . '<div class="col-md-4 mb-3"><label class="form-label">押金</label><input type="number" step="0.01" min="0" class="form-control' . ($depositAmountError !== '' ? ' is-invalid' : '') . '" name="deposit_amount" placeholder="例如：4200.00" title="押金不能小于 0" value="' . htmlspecialchars($depositAmount) . '" required>' . $this->errorFeedbackHtml($depositAmountError) . '</div>'
                 . '<div class="col-md-4 mb-3"><label class="form-label">付款日</label><input type="number" min="1" max="31" class="form-control' . ($paymentDayError !== '' ? ' is-invalid' : '') . '" name="payment_day" placeholder="1-31" title="每月付款日，范围 1-31" value="' . $paymentDay . '" required>' . $this->errorFeedbackHtml($paymentDayError) . '</div>'
@@ -1106,7 +1116,7 @@ class ContractController
             . '<option value="terminated"' . ($contractStatus === 'terminated' ? ' selected' : '') . '>已终止</option>'
                 . '</select>' . $this->errorFeedbackHtml($contractStatusError) . '</div>'
                 . '<div class="col-12 mb-3"><label class="form-label">特殊条款</label><textarea class="form-control" rows="3" name="special_terms" placeholder="可填写违约条款、补充约定（可选）">' . htmlspecialchars($specialTerms) . '</textarea></div>'
-            . '</div><div class="d-flex gap-2"><a href="/contracts" class="btn btn-secondary">取消</a><button class="btn btn-primary" type="submit">保存</button></div></form>' . $rentAutofillScript . '</div></body></html>';
+            . '</div><div class="d-flex gap-2"><a href="/contracts" class="btn btn-secondary">取消</a><button class="btn btn-primary" type="submit">保存</button></div></form>' . $rentAutofillScript . $tenantPhoneAutofillScript . '</div></body></html>';
     }
 
     private function contractDetailTemplate(array $contract, array $meters = []): string
