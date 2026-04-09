@@ -7,8 +7,10 @@ Thumbs.db
 !.vscode/extensions.json
 !.vscode/settings.json
 .idea/
+.fleet/
 *.swp
 *.swo
+*~
 
 # PHP dependencies
 /vendor/
@@ -44,6 +46,11 @@ composer.phar
 # Test and coverage artifacts
 coverage/
 .phpunit.result.cache
+.phpunit.cache/
+
+# PHP tooling cache
+.php-cs-fixer.cache
+.phpactor.json
 
 # Build and temporary files
 *.log
@@ -51,6 +58,14 @@ coverage/
 *.temp
 *.bak
 *.orig
+.cache/
+.tmp/
+
+# JS package manager logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # Node artifacts (if frontend tooling is used)
 node_modules/
