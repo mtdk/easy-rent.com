@@ -745,6 +745,17 @@ class Router
         
         // 需要认证的路由
         $this->group(['middleware' => ['auth']], function($router) {
+            // 租户管理
+            $router->get('/admin/tenants', 'TenantAdminController@index');
+            $router->get('/admin/tenants/create', 'TenantAdminController@create');
+            $router->post('/admin/tenants', 'TenantAdminController@store');
+            $router->get('/admin/tenants/{id}/edit', 'TenantAdminController@edit');
+            $router->post('/admin/tenants/{id}', 'TenantAdminController@update');
+            $router->post('/admin/tenants/{id}/delete', 'TenantAdminController@delete');
+            $router->post('/admin/tenants/{tenantId}/cohabitants/save', 'TenantAdminController@saveCohabitant');
+            $router->post('/admin/tenants/{tenantId}/cohabitants/{id}/delete', 'TenantAdminController@deleteCohabitant');
+            $router->post('/admin/tenants/{tenantId}/cohabitants/{id}/moveout', 'TenantAdminController@moveOutCohabitant');
+            $router->post('/admin/tenants/{id}/moveout', 'TenantAdminController@moveOut');
             // 仪表板
             $router->get('/dashboard', 'DashboardController@index', 'dashboard');
             $router->get('/profile', 'UserController@profile', 'profile');
@@ -764,8 +775,10 @@ class Router
             
             // 房产管理
             $router->get('/properties', 'PropertyController@index', 'properties.index');
+            $router->get('/properties/rent-adjustments', 'PropertyController@rentAdjustments', 'properties.rent_adjustments');
             $router->get('/properties/create', 'PropertyController@create', 'properties.create');
             $router->post('/properties', 'PropertyController@store', 'properties.store');
+            $router->post('/properties/{id}/rent-adjustment', 'PropertyController@updateMonthlyRent', 'properties.rent_adjustments.update');
             $router->get('/properties/{id}', 'PropertyController@show', 'properties.show');
             $router->get('/properties/{id}/edit', 'PropertyController@edit', 'properties.edit');
             $router->put('/properties/{id}', 'PropertyController@update', 'properties.update');

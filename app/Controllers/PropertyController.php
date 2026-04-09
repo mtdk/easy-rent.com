@@ -45,6 +45,81 @@ class PropertyController
         );
         return Response::html($html);
     }
+
+    /**
+     * 月租金调整页
+     */
+    public function rentAdjustments(): Response
+    {
+        $this->ensureAuthenticated();
+
+        if (!auth()->isAdmin() && !auth()->isLandlord()) {
+            throw HttpException::forbidden('您没有权限调整月租金');
+        }
+
+        $user = auth()->user();
+        $isAdmin = auth()->isAdmin();
+        $keyword = trim((string) ($_GET['keyword'] ?? ''));
+        $status = trim((string) ($_GET['status'] ?? ''));
+        $sort = $this->normalizePropertySort((string) ($_GET['sort'] ?? 'name_asc'));
+        $page = max(1, (int) ($_GET['page'] ?? 1));
+        $perPage = min(20, max(5, (int) ($_GET['per_page'] ?? 10)));
+
+        $result = $this->getProperties($user, $isAdmin, $keyword, $status, $sort, $page, $perPage);
+
+        return Response::html($this->rentAdjustmentTemplate(
+            $result['items'],
+            $isAdmin,
+            $keyword,
+            $status,
+            $result['sort'],
+            $result['page'],
+            $result['per_page'],
+            $result['total']
+        ));
+    }
+
+    /**
+     * 更新单个房产月租金
+     */
+    public function updateMonthlyRent(int $id): Response
+    {
+        $this->ensureAuthenticated();
+
+        if (!auth()->isAdmin() && !auth()->isLandlord()) {
+            throw HttpException::forbidden('您没有权限调整月租金');
+        }
+
+        if (!session()->validateToken($_POST['_token'] ?? '')) {
+            return Response::json(['success' => false, 'message' => 'CSRF令牌无效'], 403);
+        }
+
+        $property = $this->getPropertyById($id, auth()->user(), auth()->isAdmin());
+        if (!$property) {
+            throw HttpException::notFound('房产不存在或无权访问');
+        }
+        $this->assertOwnerOrAdmin($property);
+
+        $monthlyRentRaw = trim((string) ($_POST['monthly_rent'] ?? ''));
+        $redirectUrl = '/properties/rent-adjustments';
+        $returnQuery = trim((string) ($_POST['return_query'] ?? ''));
+        if ($returnQuery !== '') {
+            $redirectUrl .= '?' . ltrim($returnQuery, '?');
+        }
+
+        if ($monthlyRentRaw === '' || !is_numeric($monthlyRentRaw) || (float) $monthlyRentRaw < 0) {
+            flash('error', '月租金格式无效，需为不小于 0 的数字');
+            return Response::redirect($redirectUrl);
+        }
+
+        db()->update('properties', [
+            'monthly_rent' => number_format((float) $monthlyRentRaw, 2, '.', ''),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ], ['id' => $id]);
+
+        flash('success', '月租金更新成功：' . (string) ($property['name'] ?? '房产') . ' -> ¥' . number_format((float) $monthlyRentRaw, 2));
+        return Response::redirect($redirectUrl);
+    }
     
     /**
      * 显示创建房产表单
@@ -574,10 +649,10 @@ class PropertyController
         ' . $alerts . '
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1>房产管理</h1>
-            ' . ($canCreate ? '
-            <a href="/properties/create" class="btn btn-primary">
-                添加房产
-            </a>' : '') . '
+            <div class="d-flex gap-2">
+                <a href="/properties/rent-adjustments" class="btn btn-outline-primary">月租金调整</a>
+                ' . ($canCreate ? '<a href="/properties/create" class="btn btn-primary">添加房产</a>' : '') . '
+            </div>
         </div>
 
         <form class="row g-2 mb-3" method="GET" action="/properties">
@@ -643,6 +718,95 @@ class PropertyController
 </html>';
         
         return $html;
+    }
+
+    /**
+     * 月租金调整页面模板
+     */
+    private function rentAdjustmentTemplate(
+        array $properties,
+        bool $isAdmin,
+        string $keyword,
+        string $status,
+        string $sort,
+        int $page,
+        int $perPage,
+        int $total
+    ): string
+    {
+        $lastPage = max(1, (int) ceil(($total > 0 ? $total : 1) / $perPage));
+        $baseQuery = [
+            'keyword' => $keyword,
+            'status' => $status,
+            'sort' => $sort,
+            'per_page' => $perPage,
+            'page' => $page,
+        ];
+        $returnQuery = http_build_query($baseQuery);
+
+        $pagination = '';
+        if ($lastPage > 1) {
+            $pagination .= '<nav aria-label="月租金调整分页"><ul class="pagination justify-content-end mb-0">';
+            for ($i = 1; $i <= $lastPage; $i++) {
+                $query = http_build_query(array_merge($baseQuery, ['page' => $i]));
+                $active = $i === $page ? ' active' : '';
+                $pagination .= '<li class="page-item' . $active . '"><a class="page-link" href="/properties/rent-adjustments?' . $query . '">' . $i . '</a></li>';
+            }
+            $pagination .= '</ul></nav>';
+        }
+
+        $rows = '';
+        foreach ($properties as $property) {
+            $rows .= '<tr>'
+                . '<td data-label="ID">' . (int) $property['id'] . '</td>'
+                . '<td data-label="房产">'
+                . '<div class="fw-semibold">' . htmlspecialchars((string) $property['name'], ENT_QUOTES) . '</div>'
+                . '<div class="text-muted small">' . htmlspecialchars((string) $property['address'], ENT_QUOTES) . '</div>'
+                . '</td>'
+                . '<td data-label="当前月租" class="text-end">¥' . number_format((float) $property['monthly_rent'], 2) . '</td>'
+                . '<td data-label="新月租">'
+                . '<form method="POST" action="/properties/' . (int) $property['id'] . '/rent-adjustment" class="d-flex gap-2 align-items-center justify-content-end flex-wrap">'
+                . '<input type="hidden" name="_token" value="' . csrf_token() . '">'
+                . '<input type="hidden" name="return_query" value="' . htmlspecialchars($returnQuery, ENT_QUOTES) . '">'
+                . '<input type="number" min="0" step="0.01" class="form-control form-control-sm rent-input" name="monthly_rent" value="' . htmlspecialchars(number_format((float) $property['monthly_rent'], 2, '.', ''), ENT_QUOTES) . '" required>'
+                . '<button type="submit" class="btn btn-sm btn-primary">保存</button>'
+                . '</form>'
+                . '</td>'
+                . '</tr>';
+        }
+
+        if ($rows === '') {
+            $rows = '<tr><td colspan="4" class="text-center text-muted py-4">暂无可调整的房产数据</td></tr>';
+        }
+
+        $navbarStyles = app_unified_navbar_styles();
+        $navigation = app_unified_navbar([
+            'active' => 'properties',
+            'is_admin' => $isAdmin,
+            'show_user_menu' => true,
+            'collapse_id' => 'propertyRentAdjustNavbar',
+        ]);
+        $alerts = $this->renderFlashAlerts();
+
+        return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>月租金调整</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css"><link rel="stylesheet" href="/assets/css/bootstrap-icons.css">'
+            . $navbarStyles
+            . '<style>.rent-adjust-note{background:#f8fbff;border:1px solid #dbe7f6;border-radius:.75rem;padding:.75rem .9rem;color:#334155}.rent-input{max-width:11rem}@media (max-width: 767.98px){.rent-adjust-table thead{display:none}.rent-adjust-table tbody,.rent-adjust-table tr,.rent-adjust-table td{display:block;width:100%}.rent-adjust-table tr{border:1px solid #dee2e6;border-radius:.5rem;padding:.55rem .75rem;margin-bottom:.7rem;background:#fff}.rent-adjust-table td{border:0 !important;padding:.2rem 0 .2rem 7.5rem;position:relative}.rent-adjust-table td::before{content:attr(data-label);position:absolute;left:0;top:.2rem;width:7rem;color:#6c757d;font-weight:600;font-size:.85rem}.rent-adjust-table td[colspan]{padding-left:0;text-align:center}.rent-adjust-table td[colspan]::before{display:none}.rent-input{max-width:none}}</style>'
+            . '</head><body>'
+            . $navigation
+            . '<div class="container mt-4">'
+            . $alerts
+            . '<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2"><h3 class="mb-0">月租金调整</h3><a href="/properties" class="btn btn-outline-secondary">返回房产列表</a></div>'
+            . '<div class="rent-adjust-note mb-3"><strong>说明：</strong>这里修改的是房产基础月租金，用于后续录入默认值；不会自动改写已生成账单与既有合同月租。</div>'
+            . '<form class="row g-2 mb-3" method="GET" action="/properties/rent-adjustments">'
+            . '<div class="col-md-5"><input type="text" name="keyword" class="form-control" placeholder="按名称/地址搜索" value="' . htmlspecialchars($keyword, ENT_QUOTES) . '"></div>'
+            . '<div class="col-md-3"><select name="status" class="form-select"><option value="">全部状态</option><option value="vacant"' . ($status === 'vacant' ? ' selected' : '') . '>空置</option><option value="occupied"' . ($status === 'occupied' ? ' selected' : '') . '>已入住</option><option value="under_maintenance"' . ($status === 'under_maintenance' ? ' selected' : '') . '>维修中</option><option value="unavailable"' . ($status === 'unavailable' ? ' selected' : '') . '>不可用</option></select></div>'
+            . '<div class="col-md-2"><select name="sort" class="form-select"><option value="name_asc"' . ($sort === 'name_asc' ? ' selected' : '') . '>名称 A-Z</option><option value="name_desc"' . ($sort === 'name_desc' ? ' selected' : '') . '>名称 Z-A</option><option value="rent_desc"' . ($sort === 'rent_desc' ? ' selected' : '') . '>租金从高到低</option><option value="rent_asc"' . ($sort === 'rent_asc' ? ' selected' : '') . '>租金从低到高</option><option value="created_desc"' . ($sort === 'created_desc' ? ' selected' : '') . '>最新创建</option><option value="created_asc"' . ($sort === 'created_asc' ? ' selected' : '') . '>最早创建</option></select></div>'
+            . '<div class="col-md-2 d-grid"><button type="submit" class="btn btn-outline-primary">筛选</button></div>'
+            . '<input type="hidden" name="per_page" value="' . $perPage . '">' 
+            . '</form>'
+            . '<div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2"><small class="text-muted">共 ' . $total . ' 条，当前第 ' . $page . '/' . $lastPage . ' 页</small>' . $pagination . '</div>'
+            . '<div class="card"><div class="card-body"><div class="table-responsive"><table class="table table-sm table-bordered align-middle rent-adjust-table"><thead><tr><th>ID</th><th>房产</th><th class="text-end">当前月租</th><th class="text-end">新月租</th></tr></thead><tbody>' . $rows . '</tbody></table></div></div></div>'
+            . '</div></body></html>';
     }
     
     /**

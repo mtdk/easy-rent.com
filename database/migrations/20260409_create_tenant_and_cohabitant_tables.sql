@@ -1,0 +1,27 @@
+-- 租户（租用人）表
+CREATE TABLE tenants (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    name VARCHAR(32) NOT NULL COMMENT '姓名',
+    gender ENUM('男','女','未知') NOT NULL DEFAULT '未知' COMMENT '性别',
+    id_number CHAR(18) NOT NULL COMMENT '身份证号',
+    phone VARCHAR(20) DEFAULT NULL COMMENT '联系电话',
+    address VARCHAR(128) DEFAULT NULL COMMENT '户籍地址',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    UNIQUE KEY uniq_id_number (id_number)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='租户（租用人）';
+
+-- 共同居住人表
+CREATE TABLE tenant_cohabitants (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+    tenant_id INT UNSIGNED NOT NULL COMMENT '租户ID',
+    name VARCHAR(32) NOT NULL COMMENT '姓名',
+    gender ENUM('男','女','未知') NOT NULL DEFAULT '未知' COMMENT '性别',
+    id_number CHAR(18) NOT NULL COMMENT '身份证号',
+    phone VARCHAR(20) DEFAULT NULL COMMENT '联系电话',
+    address VARCHAR(128) DEFAULT NULL COMMENT '户籍地址',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    UNIQUE KEY uniq_tenant_id_number (tenant_id, id_number)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='共同居住人';

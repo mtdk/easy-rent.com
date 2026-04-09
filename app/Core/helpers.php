@@ -370,6 +370,15 @@ if (!function_exists('app_unified_navbar')) {
         $items = [
             ['key' => 'dashboard', 'label' => '仪表板', 'icon' => 'bi-speedometer2', 'href' => '/dashboard', 'admin_only' => false],
             ['key' => 'users', 'label' => '用户管理', 'icon' => 'bi-people-fill', 'href' => '/users', 'admin_only' => true],
+            // 支持租户管理所有相关路由高亮
+            ['key' => 'tenants', 'label' => '租户管理', 'icon' => 'bi-person-vcard-fill', 'href' => '/admin/tenants', 'admin_only' => false, 'landlord_only' => true, 'active_patterns' => [
+                '/admin/tenants',
+                '/admin/tenants/create',
+                '/admin/tenants/[0-9]+/edit',
+                '/admin/tenants/[0-9]+',
+                '/admin/tenants/[0-9]+/delete',
+                '/admin/tenants/[0-9]+/cohabitants',
+            ]],
             ['key' => 'settings', 'label' => '系统设置', 'icon' => 'bi-sliders2', 'href' => '/settings', 'admin_only' => true],
             ['key' => 'api_management', 'label' => 'API管理', 'icon' => 'bi-cloud-check-fill', 'href' => '/api-tokens', 'admin_only' => true],
             ['key' => 'properties', 'label' => '房产管理', 'icon' => 'bi-house-heart-fill', 'href' => '/properties', 'admin_only' => false],
@@ -380,8 +389,13 @@ if (!function_exists('app_unified_navbar')) {
         ];
 
         $leftItems = '';
+        $isLandlord = function_exists('auth') && auth()->isLandlord();
+        $currentPath = $_SERVER['REQUEST_URI'] ?? '';
         foreach ($items as $item) {
             if ($item['admin_only'] && !$isAdmin) {
+                continue;
+            }
+            if (isset($item['landlord_only']) && $item['landlord_only'] && !$isAdmin && !$isLandlord) {
                 continue;
             }
 
@@ -420,8 +434,6 @@ if (!function_exists('app_unified_navbar')) {
                     . '<a class="nav-link dropdown-toggle' . ($isPaymentsActive ? ' active" aria-current="page' : '') . '" href="#" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi ' . $item['icon'] . ' me-1"></i>' . $item['label'] . '</a>'
                     . '<ul class="dropdown-menu">'
                     . '<li><a class="dropdown-item' . ($active === 'payments' ? ' active' : '') . '" href="/payments"><i class="bi bi-list-check me-1"></i>账单列表</a></li>'
-                    . '<li><a class="dropdown-item" href="/payments?status=unpaid"><i class="bi bi-cash-coin me-1"></i>登记收款</a></li>'
-                    . '<li><a class="dropdown-item" href="/payments?status=unpaid"><i class="bi bi-tag me-1"></i>抵扣来源录入</a></li>'
                     . '<li><a class="dropdown-item' . ($active === 'payments_create' ? ' active' : '') . '" href="/payments/create"><i class="bi bi-plus-square me-1"></i>新建月度账单</a></li>'
                     . '<li><a class="dropdown-item' . ($active === 'payments_reconciliation' ? ' active' : '') . '" href="/payments/reconciliation"><i class="bi bi-clipboard2-data me-1"></i>月度对账</a></li>'
                     . ($isAdmin ? '<li><hr class="dropdown-divider"></li><li><a class="dropdown-item' . ($active === 'meter_types' ? ' active' : '') . '" href="/meter-types"><i class="bi bi-speedometer me-1"></i>计量类型管理</a></li>' : '')
@@ -446,6 +458,16 @@ if (!function_exists('app_unified_navbar')) {
             }
 
             $isActive = $item['key'] === $active;
+            // 支持正则高亮
+            if (!$isActive && isset($item['active_patterns']) && is_array($item['active_patterns'])) {
+                foreach ($item['active_patterns'] as $pattern) {
+                    $regex = '#^' . str_replace(['/', '[0-9]+'], ['\/', '\d+'], $pattern) . '$#';
+                    if (preg_match($regex, $currentPath)) {
+                        $isActive = true;
+                        break;
+                    }
+                }
+            }
             $leftItems .= '<li class="nav-item"><a class="nav-link' . ($isActive ? ' active" aria-current="page' : '') . '" href="' . $item['href'] . '"><i class="bi ' . $item['icon'] . ' me-1"></i>' . $item['label'] . '</a></li>';
         }
 
