@@ -795,6 +795,9 @@ class Router
             $router->post('/payments/generate', 'PaymentController@generate', 'payments.generate');
             $router->post('/payments/{id}/record', 'PaymentController@record', 'payments.record');
             $router->get('/payments/{id}/receipt', 'PaymentController@receipt', 'payments.receipt');
+            $router->get('/meter-types', 'PaymentController@meterTypes', 'meter_types.index');
+            $router->post('/meter-types', 'PaymentController@meterTypeStore', 'meter_types.store');
+            $router->post('/meter-types/{id}', 'PaymentController@meterTypeUpdate', 'meter_types.update');
 
             // 支出管理
             $router->get('/expenses', 'ExpenseController@index', 'expenses.index');

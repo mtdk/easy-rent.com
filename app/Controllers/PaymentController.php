@@ -590,6 +590,115 @@ class PaymentController
         return Response::html($this->receiptTemplate($payment));
     }
 
+    public function meterTypes(): Response
+    {
+        $this->ensureAuthenticated();
+        $this->ensureAdminOnly();
+
+        $rows = $this->getMeterTypeRows(true);
+
+        return Response::html($this->meterTypesTemplate($rows));
+    }
+
+    public function meterTypeStore(): Response
+    {
+        $this->ensureAuthenticated();
+        $this->ensureAdminOnly();
+
+        if (!session()->validateToken($_POST['_token'] ?? '')) {
+            return Response::json(['success' => false, 'message' => 'CSRF令牌无效'], 403);
+        }
+
+        $typeKey = strtolower(trim((string) ($_POST['type_key'] ?? '')));
+        $typeName = trim((string) ($_POST['type_name'] ?? ''));
+        $prefix = strtoupper(trim((string) ($_POST['default_code_prefix'] ?? '')));
+        $sortOrder = (int) ($_POST['sort_order'] ?? 0);
+        $isActive = (string) ($_POST['is_active'] ?? '') === '1' ? 1 : 0;
+
+        if (!preg_match('/^[a-z][a-z0-9_]{1,29}$/', $typeKey)) {
+            flash('error', '类型编码仅支持小写字母、数字、下划线，且长度 2-30');
+            return Response::redirect('/meter-types');
+        }
+
+        if ($typeName === '') {
+            flash('error', '类型名称不能为空');
+            return Response::redirect('/meter-types');
+        }
+
+        if (mb_strlen($typeName) > 50) {
+            $typeName = mb_substr($typeName, 0, 50);
+        }
+
+        if (!preg_match('/^[A-Z][A-Z0-9_]{1,19}$/', $prefix)) {
+            flash('error', '默认编号前缀仅支持大写字母、数字、下划线，且长度 2-20');
+            return Response::redirect('/meter-types');
+        }
+
+        $exists = db()->fetch('SELECT id FROM meter_types WHERE type_key = ? LIMIT 1', [$typeKey]);
+        if ($exists) {
+            flash('error', '类型编码已存在');
+            return Response::redirect('/meter-types');
+        }
+
+        db()->insert('meter_types', [
+            'type_key' => $typeKey,
+            'type_name' => $typeName,
+            'default_code_prefix' => $prefix,
+            'sort_order' => $sortOrder,
+            'is_active' => $isActive,
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+
+        flash('success', '计量类型添加成功');
+        return Response::redirect('/meter-types');
+    }
+
+    public function meterTypeUpdate(int $id): Response
+    {
+        $this->ensureAuthenticated();
+        $this->ensureAdminOnly();
+
+        if (!session()->validateToken($_POST['_token'] ?? '')) {
+            return Response::json(['success' => false, 'message' => 'CSRF令牌无效'], 403);
+        }
+
+        $row = db()->fetch('SELECT id, type_key FROM meter_types WHERE id = ? LIMIT 1', [$id]);
+        if (!$row) {
+            throw HttpException::notFound('计量类型不存在');
+        }
+
+        $typeName = trim((string) ($_POST['type_name'] ?? ''));
+        $prefix = strtoupper(trim((string) ($_POST['default_code_prefix'] ?? '')));
+        $sortOrder = (int) ($_POST['sort_order'] ?? 0);
+        $isActive = (string) ($_POST['is_active'] ?? '') === '1' ? 1 : 0;
+
+        if ($typeName === '') {
+            flash('error', '类型名称不能为空');
+            return Response::redirect('/meter-types');
+        }
+
+        if (mb_strlen($typeName) > 50) {
+            $typeName = mb_substr($typeName, 0, 50);
+        }
+
+        if (!preg_match('/^[A-Z][A-Z0-9_]{1,19}$/', $prefix)) {
+            flash('error', '默认编号前缀仅支持大写字母、数字、下划线，且长度 2-20');
+            return Response::redirect('/meter-types');
+        }
+
+        db()->update('meter_types', [
+            'type_name' => $typeName,
+            'default_code_prefix' => $prefix,
+            'sort_order' => $sortOrder,
+            'is_active' => $isActive,
+            'updated_at' => date('Y-m-d H:i:s'),
+        ], ['id' => $id]);
+
+        flash('success', '计量类型更新成功');
+        return Response::redirect('/meter-types');
+    }
+
     private function generateBillsForPeriod(string $period, array $user, bool $isAdmin): int
     {
         [$year, $month] = array_map('intval', explode('-', $period));
@@ -2041,6 +2150,116 @@ class PaymentController
         if (!auth()->check()) {
             throw HttpException::unauthorized('请先登录');
         }
+    }
+
+    private function ensureAdminOnly(): void
+    {
+        if (!auth()->isAdmin()) {
+            throw HttpException::forbidden('仅管理员可执行此操作');
+        }
+    }
+
+    private function renderFlashAlerts(): string
+    {
+        $html = '';
+
+        if (has_flash('success')) {
+            $message = (string) get_flash('success');
+            $html .= '<div class="alert alert-success" role="alert">' . htmlspecialchars($message, ENT_QUOTES) . '</div>';
+        }
+
+        if (has_flash('error')) {
+            $message = (string) get_flash('error');
+            $html .= '<div class="alert alert-danger" role="alert">' . htmlspecialchars($message, ENT_QUOTES) . '</div>';
+        }
+
+        return $html;
+    }
+
+    private function getMeterTypeRows(bool $includeInactive = true): array
+    {
+        $sql = 'SELECT id, type_key, type_name, default_code_prefix, sort_order, is_active, created_at, updated_at FROM meter_types WHERE 1 = 1';
+        $params = [];
+
+        if (!$includeInactive) {
+            $sql .= ' AND is_active = 1';
+        }
+
+        $sql .= ' ORDER BY sort_order ASC, id ASC';
+
+        try {
+            return db()->fetchAll($sql, $params);
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    private function meterTypesTemplate(array $rows): string
+    {
+        $navbarStyles = app_unified_navbar_styles();
+        $navigation = app_unified_navbar([
+            'active' => 'meter_types',
+            'is_admin' => true,
+            'show_user_menu' => true,
+            'collapse_id' => 'meterTypesNavbar',
+        ]);
+
+        $alerts = $this->renderFlashAlerts();
+        $tableRows = '';
+
+        foreach ($rows as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            $isActive = (int) ($row['is_active'] ?? 1) === 1;
+            $statusBadge = $isActive
+                ? '<span class="badge bg-success">启用</span>'
+                : '<span class="badge bg-secondary">停用</span>';
+
+            $tableRows .= '<tr>'
+                . '<td>' . $id . '</td>'
+                . '<td>' . htmlspecialchars((string) ($row['type_key'] ?? ''), ENT_QUOTES) . '</td>'
+                . '<td>' . htmlspecialchars((string) ($row['type_name'] ?? ''), ENT_QUOTES) . '</td>'
+                . '<td>' . htmlspecialchars((string) ($row['default_code_prefix'] ?? ''), ENT_QUOTES) . '</td>'
+                . '<td class="text-end">' . (int) ($row['sort_order'] ?? 0) . '</td>'
+                . '<td>' . $statusBadge . '</td>'
+                . '<td>'
+                . '<form method="POST" action="/meter-types/' . $id . '" class="row g-1 align-items-center">'
+                . '<input type="hidden" name="_token" value="' . csrf_token() . '">'
+                . '<div class="col-md-3"><input class="form-control form-control-sm" name="type_name" value="' . htmlspecialchars((string) ($row['type_name'] ?? ''), ENT_QUOTES) . '" required></div>'
+                . '<div class="col-md-2"><input class="form-control form-control-sm" name="default_code_prefix" value="' . htmlspecialchars((string) ($row['default_code_prefix'] ?? ''), ENT_QUOTES) . '" required></div>'
+                . '<div class="col-md-2"><input class="form-control form-control-sm" type="number" name="sort_order" value="' . (int) ($row['sort_order'] ?? 0) . '"></div>'
+                . '<div class="col-md-2"><select class="form-select form-select-sm" name="is_active"><option value="1"' . ($isActive ? ' selected' : '') . '>启用</option><option value="0"' . (!$isActive ? ' selected' : '') . '>停用</option></select></div>'
+                . '<div class="col-md-3"><button class="btn btn-sm btn-outline-primary w-100" type="submit">保存</button></div>'
+                . '</form>'
+                . '</td>'
+                . '</tr>';
+        }
+
+        if ($tableRows === '') {
+            $tableRows = '<tr><td colspan="7" class="text-center text-muted">暂无计量类型，请先新增</td></tr>';
+        }
+
+        return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>计量类型管理</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css">' . $navbarStyles . '</head><body>'
+            . $navigation
+            . '<div class="container mt-4">'
+            . '<div class="d-flex justify-content-between align-items-center mb-3"><h3 class="mb-0">计量类型管理</h3><a class="btn btn-outline-secondary" href="/payments">返回账单</a></div>'
+            . $alerts
+            . '<div class="card mb-3"><div class="card-body">'
+            . '<h6 class="mb-3">新增计量类型</h6>'
+            . '<form class="row g-2" method="POST" action="/meter-types">'
+            . '<input type="hidden" name="_token" value="' . csrf_token() . '">'
+            . '<div class="col-md-2"><label class="form-label">类型编码</label><input class="form-control" name="type_key" placeholder="如 gas" required></div>'
+            . '<div class="col-md-3"><label class="form-label">类型名称</label><input class="form-control" name="type_name" placeholder="如 天然气表" required></div>'
+            . '<div class="col-md-3"><label class="form-label">默认编号前缀</label><input class="form-control" name="default_code_prefix" placeholder="如 GAS" required></div>'
+            . '<div class="col-md-2"><label class="form-label">排序</label><input class="form-control" type="number" name="sort_order" value="0"></div>'
+            . '<div class="col-md-2"><label class="form-label">状态</label><select class="form-select" name="is_active"><option value="1" selected>启用</option><option value="0">停用</option></select></div>'
+            . '<div class="col-12 d-grid"><button class="btn btn-primary" type="submit">添加类型</button></div>'
+            . '</form>'
+            . '</div></div>'
+            . '<div class="card"><div class="card-body table-responsive">'
+            . '<h6 class="mb-3">已有类型</h6>'
+            . '<table class="table table-sm table-bordered align-middle"><thead><tr><th>ID</th><th>编码</th><th>名称</th><th>默认前缀</th><th class="text-end">排序</th><th>状态</th><th style="min-width:420px;">维护</th></tr></thead><tbody>' . $tableRows . '</tbody></table>'
+            . '</div></div>'
+            . '</div></body></html>';
     }
 
     private function paymentStatusBadge(string $status): string

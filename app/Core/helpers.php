@@ -375,6 +375,7 @@ if (!function_exists('app_unified_navbar')) {
             ['key' => 'properties', 'label' => '房产管理', 'icon' => 'bi-house-heart-fill', 'href' => '/properties', 'admin_only' => false],
             ['key' => 'contracts', 'label' => '合同管理', 'icon' => 'bi-file-earmark-text-fill', 'href' => '/contracts', 'admin_only' => false],
             ['key' => 'payments', 'label' => '账单与收款', 'icon' => 'bi-cash-stack', 'href' => '/payments', 'admin_only' => false],
+            ['key' => 'meter_types', 'label' => '计量类型', 'icon' => 'bi-speedometer', 'href' => '/meter-types', 'admin_only' => true],
             ['key' => 'expenses', 'label' => '支出管理', 'icon' => 'bi-wrench-adjustable-circle-fill', 'href' => '/expenses', 'admin_only' => false],
             ['key' => 'notifications', 'label' => '通知中心', 'icon' => 'bi-bell-fill', 'href' => '/notifications', 'admin_only' => false],
         ];
