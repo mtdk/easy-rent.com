@@ -375,7 +375,6 @@ if (!function_exists('app_unified_navbar')) {
             ['key' => 'properties', 'label' => '房产管理', 'icon' => 'bi-house-heart-fill', 'href' => '/properties', 'admin_only' => false],
             ['key' => 'contracts', 'label' => '合同管理', 'icon' => 'bi-file-earmark-text-fill', 'href' => '/contracts', 'admin_only' => false],
             ['key' => 'payments', 'label' => '账单与收款', 'icon' => 'bi-cash-stack', 'href' => '/payments', 'admin_only' => false],
-            ['key' => 'meter_types', 'label' => '计量类型', 'icon' => 'bi-speedometer', 'href' => '/meter-types', 'admin_only' => true],
             ['key' => 'expenses', 'label' => '支出管理', 'icon' => 'bi-wrench-adjustable-circle-fill', 'href' => '/expenses', 'admin_only' => false],
             ['key' => 'notifications', 'label' => '通知中心', 'icon' => 'bi-bell-fill', 'href' => '/notifications', 'admin_only' => false],
         ];
@@ -409,6 +408,21 @@ if (!function_exists('app_unified_navbar')) {
                     . '<li><a class="dropdown-item" href="/expenses"><i class="bi bi-list-ul me-1"></i>支出记录</a></li>'
                     . '<li><a class="dropdown-item" href="/expenses/create"><i class="bi bi-plus-square me-1"></i>新增支出</a></li>'
                     . '<li><a class="dropdown-item" href="/expenses/categories"><i class="bi bi-tags me-1"></i>分类管理</a></li>'
+                    . '</ul>'
+                    . '</li>';
+                continue;
+            }
+
+            if ($item['key'] === 'payments') {
+                $isPaymentsActive = in_array($active, ['payments', 'payments_create', 'payments_reconciliation', 'meter_types'], true);
+
+                $leftItems .= '<li class="nav-item dropdown">'
+                    . '<a class="nav-link dropdown-toggle' . ($isPaymentsActive ? ' active" aria-current="page' : '') . '" href="#" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi ' . $item['icon'] . ' me-1"></i>' . $item['label'] . '</a>'
+                    . '<ul class="dropdown-menu">'
+                    . '<li><a class="dropdown-item' . ($active === 'payments' ? ' active' : '') . '" href="/payments"><i class="bi bi-list-check me-1"></i>账单列表</a></li>'
+                    . '<li><a class="dropdown-item' . ($active === 'payments_create' ? ' active' : '') . '" href="/payments/create"><i class="bi bi-plus-square me-1"></i>新建月度账单</a></li>'
+                    . '<li><a class="dropdown-item' . ($active === 'payments_reconciliation' ? ' active' : '') . '" href="/payments/reconciliation"><i class="bi bi-clipboard2-data me-1"></i>月度对账</a></li>'
+                    . ($isAdmin ? '<li><hr class="dropdown-divider"></li><li><a class="dropdown-item' . ($active === 'meter_types' ? ' active' : '') . '" href="/meter-types"><i class="bi bi-speedometer me-1"></i>计量类型管理</a></li>' : '')
                     . '</ul>'
                     . '</li>';
                 continue;
