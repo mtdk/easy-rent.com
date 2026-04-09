@@ -1,0 +1,41 @@
+CREATE TABLE IF NOT EXISTS contract_meters (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  contract_id INT UNSIGNED NOT NULL,
+  meter_type ENUM('water', 'electric') NOT NULL,
+  meter_code VARCHAR(60) NOT NULL,
+  meter_name VARCHAR(100) NULL,
+  default_unit_price DECIMAL(10,4) NOT NULL DEFAULT 0.0000,
+  initial_reading DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  UNIQUE KEY uk_contract_meters_code (contract_id, meter_code),
+  KEY idx_contract_meters_contract (contract_id),
+  KEY idx_contract_meters_type (meter_type),
+  KEY idx_contract_meters_active (is_active),
+  CONSTRAINT fk_contract_meters_contract FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS rent_payment_meter_details (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  rent_payment_id INT UNSIGNED NOT NULL,
+  contract_id INT UNSIGNED NOT NULL,
+  meter_id BIGINT UNSIGNED NULL,
+  meter_type ENUM('water', 'electric') NOT NULL,
+  meter_code_snapshot VARCHAR(60) NOT NULL,
+  meter_name_snapshot VARCHAR(100) NULL,
+  previous_reading DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  current_reading DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  usage_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  unit_price DECIMAL(10,4) NOT NULL DEFAULT 0.0000,
+  line_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  created_at DATETIME NOT NULL,
+  KEY idx_meter_details_payment (rent_payment_id),
+  KEY idx_meter_details_contract (contract_id),
+  KEY idx_meter_details_meter (meter_id),
+  KEY idx_meter_details_type (meter_type),
+  CONSTRAINT fk_meter_details_payment FOREIGN KEY (rent_payment_id) REFERENCES rent_payments(id) ON DELETE CASCADE,
+  CONSTRAINT fk_meter_details_contract FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_meter_details_meter FOREIGN KEY (meter_id) REFERENCES contract_meters(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

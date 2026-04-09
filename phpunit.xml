@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+    bootstrap="tests/bootstrap.php"
+    cacheDirectory="storage/cache/phpunit"
+    colors="true"
+>
+    <testsuites>
+        <testsuite name="EasyRent Unit Tests">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="EasyRent Integration Tests">
+            <directory>tests/Integration</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>
