@@ -523,6 +523,7 @@ class PaymentController
         }
 
         $amountPaid = (float) ($_POST['amount_paid'] ?? 0);
+        $discount = (float) ($_POST['discount'] ?? ($payment['discount'] ?? 0));
         $paymentMethod = trim((string) ($_POST['payment_method'] ?? 'bank_transfer'));
         $notes = trim((string) ($_POST['notes'] ?? ''));
 
@@ -530,15 +531,26 @@ class PaymentController
             throw HttpException::badRequest('实付金额不能小于 0');
         }
 
+        if ($discount < 0) {
+            throw HttpException::badRequest('折扣金额不能小于 0');
+        }
+
         $allowedMethods = ['cash', 'bank_transfer', 'alipay', 'wechat_pay', 'other'];
         if (!in_array($paymentMethod, $allowedMethods, true)) {
             throw HttpException::badRequest('支付方式无效');
         }
 
-        $totalDue = (float) $payment['amount_due'] + (float) $payment['late_fee'] - (float) $payment['discount'];
-        $status = 'partial';
+        $grossDue = (float) $payment['amount_due'] + (float) $payment['late_fee'];
+        if ($discount > $grossDue) {
+            throw HttpException::badRequest('折扣金额不能大于应收合计（应付+滞纳金）');
+        }
+
+        $totalDue = max(0.0, $grossDue - $discount);
+        $status = 'pending';
         if ($amountPaid >= $totalDue) {
             $status = 'paid';
+        } elseif ($amountPaid > 0 || $discount > 0) {
+            $status = 'partial';
         }
 
         $existingBill = $this->extractBillDetails($payment['notes'] ?? null);
@@ -550,6 +562,7 @@ class PaymentController
 
         db()->update('rent_payments', [
             'amount_paid' => number_format($amountPaid, 2, '.', ''),
+            'discount' => number_format($discount, 2, '.', ''),
             'payment_method' => $paymentMethod,
             'payment_status' => $status,
             'paid_date' => date('Y-m-d'),
@@ -559,21 +572,23 @@ class PaymentController
             'updated_at' => date('Y-m-d H:i:s'),
         ], ['id' => $id]);
 
-        db()->insert('financial_records', [
-            'record_type' => 'income',
-            'category' => 'rent',
-            'amount' => number_format($amountPaid, 2, '.', ''),
-            'currency' => 'CNY',
-            'description' => '租金到账: ' . $payment['payment_number'],
-            'reference_type' => 'rent_payment',
-            'reference_id' => $id,
-            'payment_method' => $paymentMethod,
-            'transaction_date' => date('Y-m-d'),
-            'recorded_by' => (int) auth()->id(),
-            'notes' => $notes !== '' ? $notes : null,
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s'),
-        ]);
+        if ($amountPaid > 0) {
+            db()->insert('financial_records', [
+                'record_type' => 'income',
+                'category' => 'rent',
+                'amount' => number_format($amountPaid, 2, '.', ''),
+                'currency' => 'CNY',
+                'description' => '租金到账: ' . $payment['payment_number'],
+                'reference_type' => 'rent_payment',
+                'reference_id' => $id,
+                'payment_method' => $paymentMethod,
+                'transaction_date' => date('Y-m-d'),
+                'recorded_by' => (int) auth()->id(),
+                'notes' => $notes !== '' ? $notes : null,
+                'created_at' => date('Y-m-d H:i:s'),
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+        }
 
         return Response::redirect('/payments/' . $id . '/receipt');
     }
@@ -3801,10 +3816,17 @@ class PaymentController
 
     private function receiptTemplate(array $payment): string
     {
-        $totalDue = (float) $payment['amount_due'] + (float) $payment['late_fee'] - (float) $payment['discount'];
+        $grossDue = (float) $payment['amount_due'] + (float) $payment['late_fee'];
+        $discount = (float) $payment['discount'];
+        $totalDue = max(0.0, $grossDue - $discount);
         $amountPaid = (float) ($payment['amount_paid'] ?? 0);
+        $unpaidAmount = max(0.0, $totalDue - $amountPaid);
         $billDetails = $this->extractBillDetails($payment['notes'] ?? null);
         $meterDetails = $this->getPaymentMeterDetails((int) ($payment['id'] ?? 0));
+        $paymentNote = $billDetails !== null
+            ? trim((string) ($billDetails['payment_note'] ?? ''))
+            : trim((string) ($payment['notes'] ?? ''));
+        $paymentMethod = (string) ($payment['payment_method'] ?? 'bank_transfer');
 
         $formulaBlock = '';
         if ($meterDetails !== []) {
@@ -3867,6 +3889,29 @@ class PaymentController
                 . '<p><strong>当月电量：</strong>' . number_format($electricUsage, 2) . ' × 单价 ¥' . number_format($electricUnitPrice, 2) . ' = 电费 ¥' . number_format($electricFee, 2) . '</p>';
         }
 
+        $recordingForm = '';
+        if ($unpaidAmount > 0.0001 || (string) ($payment['payment_status'] ?? '') !== 'paid') {
+            $recordingForm = '<hr>'
+                . '<h5 class="mb-3">登记收款（支持折扣抵扣）</h5>'
+                . '<form method="POST" action="/payments/' . (int) ($payment['id'] ?? 0) . '/record">'
+                . '<input type="hidden" name="_token" value="' . csrf_token() . '">'
+                . '<div class="row g-2">'
+                . '<div class="col-md-3"><label class="form-label">实收金额</label><input class="form-control" type="number" step="0.01" min="0" name="amount_paid" value="' . number_format($amountPaid, 2, '.', '') . '" required></div>'
+                . '<div class="col-md-3"><label class="form-label">折扣/抵扣金额</label><input class="form-control" type="number" step="0.01" min="0" max="' . number_format($grossDue, 2, '.', '') . '" name="discount" value="' . number_format($discount, 2, '.', '') . '" required></div>'
+                . '<div class="col-md-3"><label class="form-label">支付方式</label><select class="form-select" name="payment_method">'
+                . '<option value="bank_transfer"' . ($paymentMethod === 'bank_transfer' ? ' selected' : '') . '>银行转账</option>'
+                . '<option value="cash"' . ($paymentMethod === 'cash' ? ' selected' : '') . '>现金</option>'
+                . '<option value="alipay"' . ($paymentMethod === 'alipay' ? ' selected' : '') . '>支付宝</option>'
+                . '<option value="wechat_pay"' . ($paymentMethod === 'wechat_pay' ? ' selected' : '') . '>微信支付</option>'
+                . '<option value="other"' . ($paymentMethod === 'other' ? ' selected' : '') . '>其他</option>'
+                . '</select></div>'
+                . '<div class="col-md-3"><label class="form-label">本次结余参考</label><input class="form-control" value="¥' . number_format($unpaidAmount, 2) . '" disabled></div>'
+                . '<div class="col-12"><label class="form-label">备注</label><textarea class="form-control" name="notes" rows="2" placeholder="例如：押金冲抵、维修补贴抵扣等">' . htmlspecialchars($paymentNote, ENT_QUOTES) . '</textarea></div>'
+                . '<div class="col-12"><div class="small text-muted">结清规则：若 实收金额 + 折扣/抵扣金额 >= 应收合计，则账单状态更新为“已支付”。</div></div>'
+                . '<div class="col-12 d-grid"><button class="btn btn-primary" type="submit">保存收款记录</button></div>'
+                . '</div></form>';
+        }
+
         return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>支付收据</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css"></head><body>'
             . '<div class="container mt-4"><div class="card"><div class="card-body">'
             . '<h3 class="mb-3">租金支付收据</h3>'
@@ -3881,9 +3926,11 @@ class PaymentController
             . '<p><strong>折扣：</strong>¥' . number_format((float) $payment['discount'], 2) . '</p>'
             . '<p><strong>应收合计：</strong>¥' . number_format($totalDue, 2) . '</p>'
             . '<p><strong>实收金额：</strong>¥' . number_format($amountPaid, 2) . '</p>'
+            . '<p><strong>未收余额：</strong>¥' . number_format($unpaidAmount, 2) . '</p>'
             . '<p><strong>支付日期：</strong>' . htmlspecialchars((string) ($payment['paid_date'] ?? '-')) . '</p>'
             . '<p><strong>状态：</strong>' . $this->paymentStatusBadge((string) $payment['payment_status']) . '</p>'
             . $formulaBlock
+            . $recordingForm
             . '<div class="mt-3 d-flex gap-2"><a class="btn btn-secondary" href="/payments">返回账单列表</a><button class="btn btn-outline-primary" onclick="window.print()">打印收据</button></div>'
             . '</div></div></div></body></html>';
     }
