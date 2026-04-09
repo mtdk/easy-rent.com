@@ -305,6 +305,80 @@ class ContractController
     }
 
     /**
+     * 更新合同表计基础信息（含初始读数）
+     */
+    public function updateMeter(int $id, int $meterId): Response
+    {
+        $this->ensureAuthenticated();
+
+        if (!session()->validateToken($_POST['_token'] ?? '')) {
+            return Response::json(['success' => false, 'message' => 'CSRF令牌无效'], 403);
+        }
+
+        $contract = $this->getContractById($id, auth()->user(), auth()->isAdmin());
+        if (!$contract) {
+            throw HttpException::notFound('合同不存在或无权访问');
+        }
+        $this->assertContractManagePermission($contract);
+
+        $meter = db()->fetch(
+            'SELECT id, contract_id FROM contract_meters WHERE id = ? LIMIT 1',
+            [$meterId]
+        );
+        if (!$meter || (int) ($meter['contract_id'] ?? 0) !== $id) {
+            flash('error', '表计不存在或不属于当前合同');
+            return Response::redirect('/contracts/' . $id);
+        }
+
+        $meterType = trim((string) ($_POST['meter_type'] ?? ''));
+        $meterCode = trim((string) ($_POST['meter_code'] ?? ''));
+        $meterName = trim((string) ($_POST['meter_name'] ?? ''));
+        $defaultUnitPriceRaw = trim((string) ($_POST['default_unit_price'] ?? '0'));
+        $initialReadingRaw = trim((string) ($_POST['initial_reading'] ?? '0'));
+
+        if (!$this->isValidMeterTypeKey($meterType)) {
+            flash('error', '表计类型无效，请先在计量类型表中配置后再使用');
+            return Response::redirect('/contracts/' . $id);
+        }
+
+        if ($meterCode === '') {
+            flash('error', '表计编号不能为空');
+            return Response::redirect('/contracts/' . $id);
+        }
+
+        if (!is_numeric($defaultUnitPriceRaw) || (float) $defaultUnitPriceRaw < 0) {
+            flash('error', '默认单价格式无效');
+            return Response::redirect('/contracts/' . $id);
+        }
+
+        if (!is_numeric($initialReadingRaw) || (float) $initialReadingRaw < 0) {
+            flash('error', '初始读数格式无效');
+            return Response::redirect('/contracts/' . $id);
+        }
+
+        $exists = db()->fetch(
+            'SELECT id FROM contract_meters WHERE contract_id = ? AND meter_code = ? AND id <> ? LIMIT 1',
+            [$id, $meterCode, $meterId]
+        );
+        if ($exists) {
+            flash('error', '该合同下已存在相同表计编号');
+            return Response::redirect('/contracts/' . $id);
+        }
+
+        db()->update('contract_meters', [
+            'meter_type' => $meterType,
+            'meter_code' => $meterCode,
+            'meter_name' => $meterName !== '' ? $meterName : null,
+            'default_unit_price' => number_format((float) $defaultUnitPriceRaw, 4, '.', ''),
+            'initial_reading' => number_format((float) $initialReadingRaw, 2, '.', ''),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ], ['id' => $meterId]);
+
+        flash('success', '表计信息已更新');
+        return Response::redirect('/contracts/' . $id);
+    }
+
+    /**
      * 停用合同表计
      */
     public function deactivateMeter(int $id, int $meterId): Response
@@ -1079,6 +1153,7 @@ class ContractController
         }
 
         $meterForm = '';
+        $meterEditCards = '';
         if ($canManage) {
             $meterTypeOptions = '';
             foreach ($this->getMeterTypeDefinitions() as $definition) {
@@ -1106,6 +1181,46 @@ class ContractController
                 . '<div class="col-md-2"><label class="form-label">初始读数</label><input class="form-control" type="number" step="0.01" min="0" name="initial_reading" value="0.00" required></div>'
                 . '<div class="col-12 d-grid"><button class="btn btn-outline-primary" type="submit">添加表计</button></div>'
                 . '</div></form></div></div>';
+
+            foreach ($meters as $meter) {
+                $editTypeOptions = '';
+                foreach ($this->getMeterTypeDefinitions() as $definition) {
+                    $typeKey = (string) ($definition['type_key'] ?? '');
+                    if ($typeKey === '') {
+                        continue;
+                    }
+
+                    $selected = $typeKey === (string) ($meter['meter_type'] ?? '') ? ' selected' : '';
+                    $editTypeOptions .= '<option value="' . htmlspecialchars($typeKey, ENT_QUOTES) . '"' . $selected . '>'
+                        . htmlspecialchars((string) ($definition['type_name'] ?? $typeKey), ENT_QUOTES)
+                        . '</option>';
+                }
+
+                if ($editTypeOptions === '') {
+                    $meterType = (string) ($meter['meter_type'] ?? 'water');
+                    $editTypeOptions = '<option value="water"' . ($meterType === 'water' ? ' selected' : '') . '>水表</option>'
+                        . '<option value="electric"' . ($meterType === 'electric' ? ' selected' : '') . '>电表</option>'
+                        . '<option value="gas"' . ($meterType === 'gas' ? ' selected' : '') . '>天然气表</option>';
+                }
+
+                $meterEditCards .= '<div class="card mt-2"><div class="card-body">'
+                    . '<div class="d-flex justify-content-between align-items-center mb-2">'
+                    . '<h6 class="mb-0">编辑表计：' . htmlspecialchars((string) ($meter['meter_code'] ?? '-'), ENT_QUOTES) . '</h6>'
+                    . ((int) ($meter['is_active'] ?? 0) === 1
+                        ? '<span class="badge bg-success">启用</span>'
+                        : '<span class="badge bg-secondary">停用</span>')
+                    . '</div>'
+                    . '<form method="POST" action="/contracts/' . (int) $contract['id'] . '/meters/' . (int) $meter['id'] . '">'
+                    . '<input type="hidden" name="_token" value="' . csrf_token() . '">'
+                    . '<div class="row g-2">'
+                    . '<div class="col-md-2"><label class="form-label">类型</label><select class="form-select" name="meter_type" required>' . $editTypeOptions . '</select></div>'
+                    . '<div class="col-md-3"><label class="form-label">表计编号</label><input class="form-control" name="meter_code" value="' . htmlspecialchars((string) ($meter['meter_code'] ?? ''), ENT_QUOTES) . '" required></div>'
+                    . '<div class="col-md-3"><label class="form-label">表计名称</label><input class="form-control" name="meter_name" value="' . htmlspecialchars((string) ($meter['meter_name'] ?? ''), ENT_QUOTES) . '" placeholder="可选"></div>'
+                    . '<div class="col-md-2"><label class="form-label">默认单价</label><input class="form-control" type="number" step="0.0001" min="0" name="default_unit_price" value="' . htmlspecialchars(number_format((float) ($meter['default_unit_price'] ?? 0), 4, '.', ''), ENT_QUOTES) . '" required></div>'
+                    . '<div class="col-md-2"><label class="form-label">初始读数</label><input class="form-control" type="number" step="0.01" min="0" name="initial_reading" value="' . htmlspecialchars(number_format((float) ($meter['initial_reading'] ?? 0), 2, '.', ''), ENT_QUOTES) . '" required></div>'
+                    . '<div class="col-12 d-grid d-md-flex justify-content-md-end"><button class="btn btn-primary" type="submit">保存表计修改</button></div>'
+                    . '</div></form></div></div>';
+            }
         }
 
         return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>合同详情</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css"></head><body><div class="container mt-4">'
@@ -1123,6 +1238,7 @@ class ContractController
             . '<h5 class="mb-3">表计管理</h5>'
             . '<div class="table-responsive"><table class="table table-sm table-bordered align-middle"><thead><tr><th>类型</th><th>表计编号</th><th>表计名称</th><th class="text-end">默认单价</th><th class="text-end">初始读数</th><th>状态</th><th>操作</th></tr></thead><tbody>' . $meterRows . '</tbody></table></div>'
             . $meterForm
+            . ($meterEditCards !== '' ? '<div class="mt-3"><h6 class="mb-2">编辑已有表计（可修正初始读数）</h6>' . $meterEditCards . '</div>' : '')
             . '<div class="mt-3"><a class="btn btn-secondary" href="/contracts">返回列表</a>'
             . ($canManage ? ' <a class="btn btn-primary" href="/contracts/' . (int) $contract['id'] . '/edit">编辑</a>
                 <form action="/contracts/' . (int) $contract['id'] . '/renew" method="POST" style="display:inline-block" onsubmit="return confirm(\'确认基于本合同创建续约合同吗？\')">

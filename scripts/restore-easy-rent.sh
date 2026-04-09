@@ -32,6 +32,13 @@ DB_PASSWORD="${POSITIONALS[2]:-}"
 DB_NAME="${POSITIONALS[3]:-easy_rent}"
 DB_HOST="${POSITIONALS[4]:-127.0.0.1}"
 DB_PORT="${POSITIONALS[5]:-3306}"
+ALLOW_DATA_RESTORE="${ALLOW_DATA_RESTORE:-0}"
+
+if [[ "$ALLOW_DATA_RESTORE" != "1" ]]; then
+  echo "错误: 当前环境已禁用数据恢复" >&2
+  echo "如需执行恢复，请在受控运维终端临时设置: ALLOW_DATA_RESTORE=1" >&2
+  exit 1
+fi
 
 if ! command -v mysql >/dev/null 2>&1; then
   echo "错误: 未找到 mysql 命令" >&2

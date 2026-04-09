@@ -394,7 +394,8 @@ class PaymentController
             [$contractId, $period]
         );
         if ($exists) {
-            throw HttpException::conflict('该合同当前周期账单已存在');
+            flash('error', '该合同当前周期账单已存在');
+            return Response::redirect('/payments/create?contract_id=' . $contractId . '&period=' . urlencode($period));
         }
 
         $meterEntries = $this->parseMeterEntriesFromRequest($_POST, $contractId);
@@ -3750,6 +3751,7 @@ class PaymentController
 
     private function billCreateTemplate(array $contracts, ?array $selectedContract, string $period, array $meterRows): string
     {
+        $alerts = $this->renderFlashAlerts();
         $contractOptions = '';
         foreach ($contracts as $contract) {
             $selected = $selectedContract !== null && (int) $selectedContract['id'] === (int) $contract['id'] ? ' selected' : '';
@@ -3807,6 +3809,7 @@ class PaymentController
 
         return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>新建月度账单</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css"></head><body>'
             . '<div class="container mt-4"><div class="d-flex justify-content-between align-items-center mb-3"><h3>新建月度账单</h3><a href="/payments" class="btn btn-secondary">返回账单列表</a></div>'
+            . $alerts
             . '<div class="card"><div class="card-body">'
             . '<form method="POST" action="/payments">'
             . '<input type="hidden" name="_token" value="' . csrf_token() . '">'

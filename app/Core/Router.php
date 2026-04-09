@@ -778,6 +778,7 @@ class Router
             $router->post('/contracts/{id}/remind', 'ContractController@remind', 'contracts.remind');
             $router->post('/contracts/{id}/renew', 'ContractController@renew', 'contracts.renew');
             $router->post('/contracts/{id}/meters', 'ContractController@addMeter', 'contracts.meters.add');
+            $router->post('/contracts/{id}/meters/{meterId}', 'ContractController@updateMeter', 'contracts.meters.update');
             $router->post('/contracts/{id}/meters/{meterId}/deactivate', 'ContractController@deactivateMeter', 'contracts.meters.deactivate');
             $router->post('/contracts', 'ContractController@store', 'contracts.store');
             $router->get('/contracts/{id}', 'ContractController@show', 'contracts.show');

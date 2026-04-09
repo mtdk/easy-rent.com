@@ -19,8 +19,15 @@ DB_PASSWORD="${5:-}"
 DB_NAME="${6:-easy_rent}"
 DB_HOST="${7:-127.0.0.1}"
 DB_PORT="${8:-3306}"
+ALLOW_DATA_RESTORE="${ALLOW_DATA_RESTORE:-0}"
 CURRENT_STAGE="初始化"
 START_EPOCH="$(date +%s)"
+
+if [[ "$ALLOW_DATA_RESTORE" != "1" ]]; then
+  echo "错误: 当前环境已禁用数据恢复" >&2
+  echo "如需执行恢复，请在受控运维终端临时设置: ALLOW_DATA_RESTORE=1" >&2
+  exit 1
+fi
 
 LOG_DIR="storage/logs"
 mkdir -p "$LOG_DIR"
