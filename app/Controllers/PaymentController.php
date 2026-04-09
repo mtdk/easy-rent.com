@@ -525,6 +525,7 @@ class PaymentController
         $amountPaid = (float) ($_POST['amount_paid'] ?? 0);
         $discount = (float) ($_POST['discount'] ?? ($payment['discount'] ?? 0));
         $paymentMethod = trim((string) ($_POST['payment_method'] ?? 'bank_transfer'));
+        $discountSource = trim((string) ($_POST['discount_source'] ?? ''));
         $notes = trim((string) ($_POST['notes'] ?? ''));
 
         if ($amountPaid < 0) {
@@ -540,9 +541,18 @@ class PaymentController
             throw HttpException::badRequest('支付方式无效');
         }
 
+        $allowedDiscountSources = ['', 'deposit_offset', 'promotion', 'bad_debt', 'other'];
+        if (!in_array($discountSource, $allowedDiscountSources, true)) {
+            throw HttpException::badRequest('折扣抵扣来源无效');
+        }
+
         $grossDue = (float) $payment['amount_due'] + (float) $payment['late_fee'];
         if ($discount > $grossDue) {
             throw HttpException::badRequest('折扣金额不能大于应收合计（应付+滞纳金）');
+        }
+
+        if ($discount > 0 && $discountSource === '') {
+            throw HttpException::badRequest('存在折扣抵扣时，请选择抵扣来源');
         }
 
         $totalDue = max(0.0, $grossDue - $discount);
@@ -557,6 +567,7 @@ class PaymentController
         $storedNotes = $notes !== '' ? $notes : null;
         if ($existingBill !== null) {
             $existingBill['payment_note'] = $notes !== '' ? $notes : null;
+            $existingBill['discount_source'] = $discountSource !== '' ? $discountSource : null;
             $storedNotes = json_encode($existingBill, JSON_UNESCAPED_UNICODE);
         }
 
@@ -2304,6 +2315,18 @@ class PaymentController
         return $labels[$method] ?? '其他';
     }
 
+    private function discountSourceLabel(string $source): string
+    {
+        $labels = [
+            'deposit_offset' => '押金冲抵',
+            'promotion' => '优惠减免',
+            'bad_debt' => '坏账核销',
+            'other' => '其他',
+        ];
+
+        return $labels[$source] ?? '未指定';
+    }
+
     private function overdueBucketLabel(string $bucket): string
     {
         $labels = [
@@ -3826,6 +3849,9 @@ class PaymentController
         $paymentNote = $billDetails !== null
             ? trim((string) ($billDetails['payment_note'] ?? ''))
             : trim((string) ($payment['notes'] ?? ''));
+        $discountSource = $billDetails !== null
+            ? trim((string) ($billDetails['discount_source'] ?? ''))
+            : '';
         $paymentMethod = (string) ($payment['payment_method'] ?? 'bank_transfer');
 
         $formulaBlock = '';
@@ -3905,6 +3931,7 @@ class PaymentController
                 . '<option value="wechat_pay"' . ($paymentMethod === 'wechat_pay' ? ' selected' : '') . '>微信支付</option>'
                 . '<option value="other"' . ($paymentMethod === 'other' ? ' selected' : '') . '>其他</option>'
                 . '</select></div>'
+                . '<div class="col-md-3"><label class="form-label">抵扣来源</label><select class="form-select" name="discount_source"><option value=""' . ($discountSource === '' ? ' selected' : '') . '>无</option><option value="deposit_offset"' . ($discountSource === 'deposit_offset' ? ' selected' : '') . '>押金冲抵</option><option value="promotion"' . ($discountSource === 'promotion' ? ' selected' : '') . '>优惠减免</option><option value="bad_debt"' . ($discountSource === 'bad_debt' ? ' selected' : '') . '>坏账核销</option><option value="other"' . ($discountSource === 'other' ? ' selected' : '') . '>其他</option></select></div>'
                 . '<div class="col-md-3"><label class="form-label">本次结余参考</label><input class="form-control" value="¥' . number_format($unpaidAmount, 2) . '" disabled></div>'
                 . '<div class="col-12"><label class="form-label">备注</label><textarea class="form-control" name="notes" rows="2" placeholder="例如：押金冲抵、维修补贴抵扣等">' . htmlspecialchars($paymentNote, ENT_QUOTES) . '</textarea></div>'
                 . '<div class="col-12"><div class="small text-muted">结清规则：若 实收金额 + 折扣/抵扣金额 >= 应收合计，则账单状态更新为“已支付”。</div></div>'
@@ -3924,6 +3951,7 @@ class PaymentController
             . '<p><strong>应付金额：</strong>¥' . number_format((float) $payment['amount_due'], 2) . '</p>'
             . '<p><strong>滞纳金：</strong>¥' . number_format((float) $payment['late_fee'], 2) . '</p>'
             . '<p><strong>折扣：</strong>¥' . number_format((float) $payment['discount'], 2) . '</p>'
+            . (((float) $payment['discount'] > 0 && $discountSource !== '') ? '<p><strong>抵扣来源：</strong>' . htmlspecialchars($this->discountSourceLabel($discountSource), ENT_QUOTES) . '</p>' : '')
             . '<p><strong>应收合计：</strong>¥' . number_format($totalDue, 2) . '</p>'
             . '<p><strong>实收金额：</strong>¥' . number_format($amountPaid, 2) . '</p>'
             . '<p><strong>未收余额：</strong>¥' . number_format($unpaidAmount, 2) . '</p>'
