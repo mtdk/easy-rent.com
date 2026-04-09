@@ -2450,6 +2450,9 @@ class PaymentController
             'source_period' => $sourcePeriod,
             'meter_detail' => '1',
         ]);
+        $meterTypesQuickAction = $isAdmin
+            ? '<a href="/meter-types" class="btn btn-outline-warning">计量类型管理</a>'
+            : '';
 
         $currentMonth = date('Y-m');
         $presetUnpaidCurrentMonth = http_build_query(['status' => 'unpaid', 'period' => $currentMonth]);
@@ -2523,7 +2526,7 @@ class PaymentController
             . '<div class="page-head">'
             . '<div class="d-flex justify-content-between align-items-center flex-wrap gap-2">'
             . '<h3 class="mb-0">支付与账单</h3>'
-            . '<div class="d-flex gap-2 payments-toolbar"><a href="/payments/reconciliation" class="btn btn-outline-dark">月度对账</a><a href="/payments/create" class="btn btn-outline-primary">新建月度账单</a><a href="/payments/export?' . htmlspecialchars($queryString, ENT_QUOTES) . '" class="btn btn-outline-success">导出CSV</a><a href="/payments/export?' . htmlspecialchars($detailExportQuery, ENT_QUOTES) . '" class="btn btn-outline-success">导出表计明细CSV</a><a href="/dashboard" class="btn btn-outline-secondary">返回仪表板</a></div>'
+            . '<div class="d-flex gap-2 payments-toolbar"><a href="/payments/reconciliation" class="btn btn-outline-dark">月度对账</a><a href="/payments/create" class="btn btn-outline-primary">新建月度账单</a>' . $meterTypesQuickAction . '<a href="/payments/export?' . htmlspecialchars($queryString, ENT_QUOTES) . '" class="btn btn-outline-success">导出CSV</a><a href="/payments/export?' . htmlspecialchars($detailExportQuery, ENT_QUOTES) . '" class="btn btn-outline-success">导出表计明细CSV</a><a href="/dashboard" class="btn btn-outline-secondary">返回仪表板</a></div>'
             . '</div>'
             . '<p class="subtitle">集中查看账单状态、收款进度与金额区间，支持按条件筛选和快速导出。</p>'
             . '</div>'
