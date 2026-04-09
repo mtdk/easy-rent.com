@@ -79,7 +79,7 @@ class PaymentController
                         (string) ($payment['payment_status'] ?? ''),
                         (string) ($payment['due_date'] ?? ''),
                         (string) ($payment['paid_date'] ?? ''),
-                        ((string) ($meterRow['meter_type'] ?? '')) === 'water' ? '水表' : '电表',
+                        $this->meterTypeLabel((string) ($meterRow['meter_type'] ?? '')),
                         (string) ($meterRow['meter_code_snapshot'] ?? ''),
                         (string) ($meterRow['meter_name_snapshot'] ?? ''),
                         (string) ($meterRow['previous_reading'] ?? ''),
@@ -227,7 +227,7 @@ class PaymentController
             ['导出时间', date('Y-m-d H:i')],
             ['关键字', $keyword !== '' ? $keyword : '全部'],
             ['账期', ($periodFrom !== '' || $periodTo !== '') ? (($periodFrom !== '' ? $periodFrom : '不限') . '~' . ($periodTo !== '' ? $periodTo : '不限')) : '全部'],
-            ['表计类型', $meterType !== '' ? ($meterType === 'water' ? '水表' : '电表') : '全部'],
+            ['表计类型', $meterType !== '' ? $this->meterTypeLabel($meterType) : '全部'],
             ['表计编号', $meterCode !== '' ? $meterCode : '全部'],
             ['仅欠费', $unpaidOnly ? '是' : '否'],
             ['排序', $this->getReconciliationSortLabel($sortBy, $sortDir)],
@@ -399,7 +399,7 @@ class PaymentController
 
         $meterEntries = $this->parseMeterEntriesFromRequest($_POST, $contractId);
         if ($meterEntries === []) {
-            throw HttpException::badRequest('请至少填写一条水表或电表记录');
+            throw HttpException::badRequest('请至少填写一条计量表记录');
         }
 
         $waterFee = 0.0;
@@ -1762,34 +1762,31 @@ class PaymentController
             return;
         }
 
-        $defaults = $this->getDefaultMeterUnitPrices();
         $now = date('Y-m-d H:i:s');
 
-        db()->insert('contract_meters', [
-            'contract_id' => $contractId,
-            'meter_type' => 'water',
-            'meter_code' => 'WATER-1',
-            'meter_name' => '默认水表',
-            'default_unit_price' => number_format((float) $defaults['water_unit_price'], 4, '.', ''),
-            'initial_reading' => number_format(0, 2, '.', ''),
-            'is_active' => 1,
-            'sort_order' => 10,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
+        foreach ($this->getMeterTypeDefinitions() as $definition) {
+            $typeKey = (string) ($definition['type_key'] ?? '');
+            if ($typeKey === '') {
+                continue;
+            }
 
-        db()->insert('contract_meters', [
-            'contract_id' => $contractId,
-            'meter_type' => 'electric',
-            'meter_code' => 'ELECTRIC-1',
-            'meter_name' => '默认电表',
-            'default_unit_price' => number_format((float) $defaults['electric_unit_price'], 4, '.', ''),
-            'initial_reading' => number_format(0, 2, '.', ''),
-            'is_active' => 1,
-            'sort_order' => 20,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
+            $typeName = (string) ($definition['type_name'] ?? $typeKey);
+            $prefix = strtoupper((string) ($definition['default_code_prefix'] ?? $typeKey));
+            $sortOrder = (int) ($definition['sort_order'] ?? 0);
+
+            db()->insert('contract_meters', [
+                'contract_id' => $contractId,
+                'meter_type' => $typeKey,
+                'meter_code' => $prefix . '-1',
+                'meter_name' => '默认' . $typeName,
+                'default_unit_price' => number_format($this->getDefaultUnitPriceByMeterType($typeKey), 4, '.', ''),
+                'initial_reading' => number_format(0, 2, '.', ''),
+                'is_active' => 1,
+                'sort_order' => $sortOrder > 0 ? $sortOrder : 10,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
     }
 
     private function buildMeterRowsForCreate(int $contractId): array
@@ -1870,8 +1867,8 @@ class PaymentController
                 continue;
             }
 
-            if (!in_array($meterType, ['water', 'electric'], true)) {
-                throw HttpException::badRequest('表计类型仅支持水表或电表');
+            if (!$this->isAllowedMeterType($meterType)) {
+                throw HttpException::badRequest('表计类型无效，请先在计量类型表中配置后再使用');
             }
 
             if ($meterCode === '') {
@@ -1977,14 +1974,6 @@ class PaymentController
         }
 
         return $entries;
-    }
-
-    private function getDefaultMeterUnitPrices(): array
-    {
-        return [
-            'water_unit_price' => (float) $this->getSetting('rent.water_unit_price', '0'),
-            'electric_unit_price' => (float) $this->getSetting('rent.electric_unit_price', '0'),
-        ];
     }
 
     private function parseNonNegativeFloat($value, string $errorMessage): float
@@ -2494,7 +2483,7 @@ class PaymentController
             $printFilterParts[] = '账期：' . htmlspecialchars($periodFrom !== '' ? $periodFrom : '不限') . ' ~ ' . htmlspecialchars($periodTo !== '' ? $periodTo : '不限');
         }
         if ($meterType !== '') {
-            $printFilterParts[] = '表计类型：' . htmlspecialchars($meterType === 'water' ? '水表' : '电表');
+            $printFilterParts[] = '表计类型：' . htmlspecialchars($this->meterTypeLabel($meterType));
         }
         if ($meterCode !== '') {
             $printFilterParts[] = '表计编号：' . htmlspecialchars($meterCode);
@@ -2507,7 +2496,7 @@ class PaymentController
         $meterSummaryTbody = '';
         foreach ($meterSummaryRows as $meterRow) {
             $meterSummaryTbody .= '<tr>'
-                . '<td data-label="表计类型">' . htmlspecialchars(((string) ($meterRow['meter_type'] ?? '')) === 'water' ? '水表' : '电表') . '</td>'
+                . '<td data-label="表计类型">' . htmlspecialchars($this->meterTypeLabel((string) ($meterRow['meter_type'] ?? ''))) . '</td>'
                 . '<td data-label="表计编号">' . htmlspecialchars((string) ($meterRow['meter_code'] ?? '')) . '</td>'
                 . '<td data-label="表计名称">' . htmlspecialchars((string) ($meterRow['meter_name'] ?? '-')) . '</td>'
                 . '<td data-label="涉及账单" class="text-end">' . (int) ($meterRow['bill_count'] ?? 0) . '</td>'
@@ -2538,7 +2527,7 @@ class PaymentController
             . '<div class="col-md-3"><label class="form-label">关键词</label><input class="form-control" type="search" name="keyword" placeholder="租客/房号/房产名" value="' . htmlspecialchars($keyword) . '"></div>'
             . '<div class="col-md-2"><label class="form-label">起始账期</label><input class="form-control" type="month" name="period_from" value="' . htmlspecialchars($periodFrom) . '"></div>'
             . '<div class="col-md-2"><label class="form-label">结束账期</label><input class="form-control" type="month" name="period_to" value="' . htmlspecialchars($periodTo) . '"></div>'
-            . '<div class="col-md-2"><label class="form-label">表计类型</label><select class="form-select" name="meter_type"><option value="">全部</option><option value="water"' . ($meterType === 'water' ? ' selected' : '') . '>水表</option><option value="electric"' . ($meterType === 'electric' ? ' selected' : '') . '>电表</option></select></div>'
+            . '<div class="col-md-2"><label class="form-label">表计类型</label><select class="form-select" name="meter_type"><option value="">全部</option>' . $this->buildMeterTypeSelectOptionsHtml($meterType) . '</select></div>'
             . '<div class="col-md-2"><label class="form-label">表计编号</label><input class="form-control" type="text" name="meter_code" placeholder="支持模糊匹配" value="' . htmlspecialchars($meterCode) . '"></div>'
             . '<div class="col-md-2"><label class="form-label">排序字段</label><select class="form-select" name="sort_by"><option value="payment_period"' . ($sortBy === 'payment_period' ? ' selected' : '') . '>按账期</option><option value="unpaid_amount"' . ($sortBy === 'unpaid_amount' ? ' selected' : '') . '>按未收差额</option><option value="paid_rate"' . ($sortBy === 'paid_rate' ? ' selected' : '') . '>按收款率</option></select></div>'
             . '<div class="col-md-1"><label class="form-label">方向</label><select class="form-select" name="sort_dir"><option value="desc"' . ($sortDir === 'desc' ? ' selected' : '') . '>降序</option><option value="asc"' . ($sortDir === 'asc' ? ' selected' : '') . '>升序</option></select></div>'
@@ -3218,7 +3207,7 @@ class PaymentController
             $lite = '';
         }
 
-        if (!in_array($meterType, ['', 'water', 'electric'], true)) {
+        if ($meterType !== '' && !$this->isAllowedMeterType($meterType)) {
             $meterType = '';
         }
 
@@ -3516,14 +3505,14 @@ class PaymentController
         }
 
         $rentAmount = (float) ($selectedContract['rent_amount'] ?? 0);
+        $defaultMeterTypeOptions = $this->buildMeterTypeSelectOptionsHtml('water');
         $meterRowsHtml = '';
         foreach ($meterRows as $index => $row) {
             $meterRowsHtml .= '<tr data-meter-row>'
                 . '<td>'
                 . '<input type="hidden" name="meter_id[]" value="' . (int) ($row['meter_id'] ?? 0) . '">'
                 . '<select class="form-select form-select-sm" name="meter_type[]" required>'
-                . '<option value="water"' . ((string) ($row['meter_type'] ?? '') === 'water' ? ' selected' : '') . '>水表</option>'
-                . '<option value="electric"' . ((string) ($row['meter_type'] ?? '') === 'electric' ? ' selected' : '') . '>电表</option>'
+            . $this->buildMeterTypeSelectOptionsHtml((string) ($row['meter_type'] ?? ''))
                 . '</select>'
                 . '</td>'
                 . '<td><input class="form-control form-control-sm" type="text" name="meter_code[]" value="' . htmlspecialchars((string) ($row['meter_code'] ?? ''), ENT_QUOTES) . '" placeholder="如 WATER-1" required></td>'
@@ -3539,7 +3528,7 @@ class PaymentController
 
         if ($meterRowsHtml === '') {
             $meterRowsHtml = '<tr data-meter-row>'
-                . '<td><input type="hidden" name="meter_id[]" value="0"><select class="form-select form-select-sm" name="meter_type[]" required><option value="water">水表</option><option value="electric">电表</option></select></td>'
+                . '<td><input type="hidden" name="meter_id[]" value="0"><select class="form-select form-select-sm" name="meter_type[]" required>' . $defaultMeterTypeOptions . '</select></td>'
                 . '<td><input class="form-control form-control-sm" type="text" name="meter_code[]" placeholder="如 WATER-1" required></td>'
                 . '<td><input class="form-control form-control-sm" type="text" name="meter_name[]" placeholder="可选名称"></td>'
                 . '<td><input class="form-control form-control-sm" type="number" step="0.01" min="0" name="previous_reading[]" value="0.00" required></td>'
@@ -3567,10 +3556,10 @@ class PaymentController
             . '<div class="col-md-3"><label class="form-label">固定月租金</label><input class="form-control" type="number" step="0.01" id="rentAmount" value="' . number_format($rentAmount, 2, '.', '') . '" disabled></div>'
             . '<div class="col-12"><hr class="my-1"></div>'
             . '<div class="col-12">'
-            . '<div class="d-flex justify-content-between align-items-center mb-2"><label class="form-label mb-0">水电表明细（支持一套房多个水表/电表）</label><button type="button" class="btn btn-sm btn-outline-primary" id="addMeterRowBtn">新增表计</button></div>'
+            . '<div class="d-flex justify-content-between align-items-center mb-2"><label class="form-label mb-0">计量表明细（支持一套房多个表计，如水/电/气）</label><button type="button" class="btn btn-sm btn-outline-primary" id="addMeterRowBtn">新增表计</button></div>'
             . '<div class="table-responsive"><table class="table table-sm table-bordered align-middle"><thead><tr><th>类型</th><th>表计编号</th><th>表计名称</th><th>上月读数</th><th>本月读数</th><th>单价</th><th class="text-end">用量</th><th class="text-end">费用</th><th class="text-center">操作</th></tr></thead><tbody id="meterRowsBody">' . $meterRowsHtml . '</tbody></table></div>'
             . '</div>'
-            . '<div class="col-12"><div id="formulaPreview" class="alert alert-info mb-0">系统将逐行独立计算：用量 = 本月读数 - 上月读数；费用 = 用量 × 单价；应收总额 = 月租金 + 全部水费 + 全部电费。</div></div>'
+            . '<div class="col-12"><div id="formulaPreview" class="alert alert-info mb-0">系统将逐行独立计算：用量 = 本月读数 - 上月读数；费用 = 用量 × 单价；应收总额 = 月租金 + 全部计量费用。</div></div>'
             . '<div class="col-12 d-grid"><button class="btn btn-primary" type="submit"' . ($selectedContract === null ? ' disabled' : '') . '>计算并生成账单</button></div>'
             . '</div></form></div></div></div>'
             . '<script>'
@@ -3578,8 +3567,8 @@ class PaymentController
             . 'const toNum=(value)=>{const v=parseFloat(String(value??"0"));return Number.isFinite(v)?v:0;};'
             . 'const money=(v)=>"¥"+v.toFixed(2);'
             . 'const body=byId("meterRowsBody");'
-            . 'const createRow=()=>{const tr=document.createElement("tr");tr.setAttribute("data-meter-row","");tr.innerHTML="<td><input type=\"hidden\" name=\"meter_id[]\" value=\"0\"><select class=\"form-select form-select-sm\" name=\"meter_type[]\" required><option value=\"water\">水表</option><option value=\"electric\">电表</option></select></td><td><input class=\"form-control form-control-sm\" type=\"text\" name=\"meter_code[]\" placeholder=\"如 WATER-2\" required></td><td><input class=\"form-control form-control-sm\" type=\"text\" name=\"meter_name[]\" placeholder=\"可选名称\"></td><td><input class=\"form-control form-control-sm\" type=\"number\" step=\"0.01\" min=\"0\" name=\"previous_reading[]\" value=\"0.00\" required></td><td><input class=\"form-control form-control-sm\" type=\"number\" step=\"0.01\" min=\"0\" name=\"current_reading[]\" value=\"0.00\" required></td><td><input class=\"form-control form-control-sm\" type=\"number\" step=\"0.0001\" min=\"0\" name=\"unit_price[]\" value=\"0.0000\" required></td><td class=\"text-end text-nowrap usage-cell\">0.00</td><td class=\"text-end text-nowrap fee-cell\">¥0.00</td><td class=\"text-center\"><button type=\"button\" class=\"btn btn-sm btn-outline-danger remove-row-btn\">删除</button></td>";return tr;};'
-            . 'const recalc=()=>{const rent=toNum(byId("rentAmount")?.value);let waterFee=0,electricFee=0,warns=[];const rows=body.querySelectorAll("tr[data-meter-row]");rows.forEach((row)=>{const type=row.querySelector("[name=\"meter_type[]\"]")?.value||"water";const prev=toNum(row.querySelector("[name=\"previous_reading[]\"]")?.value);const cur=toNum(row.querySelector("[name=\"current_reading[]\"]")?.value);const price=toNum(row.querySelector("[name=\"unit_price[]\"]")?.value);const usage=cur-prev;const safeUsage=Math.max(0,usage);const fee=safeUsage*price;const usageCell=row.querySelector(".usage-cell");const feeCell=row.querySelector(".fee-cell");if(usageCell){usageCell.textContent=safeUsage.toFixed(2);}if(feeCell){feeCell.textContent=money(fee);}if(usage<0){warns.push("存在本月读数小于上月读数的表计");}if(type==="water"){waterFee+=fee;}else{electricFee+=fee;}});const total=rent+waterFee+electricFee;const warnHtml=warns.length>0?"<div class=\"text-danger fw-bold mb-2\">"+warns[0]+"</div>":"";byId("formulaPreview").innerHTML=warnHtml+"<div><strong>预估水费合计</strong>："+money(waterFee)+"</div><div><strong>预估电费合计</strong>："+money(electricFee)+"</div><div><strong>预估总额</strong>："+money(rent)+" + "+money(waterFee)+" + "+money(electricFee)+" = "+money(total)+"</div>";};'
+            . 'const createRow=()=>{const tr=document.createElement("tr");tr.setAttribute("data-meter-row","");tr.innerHTML="<td><input type=\"hidden\" name=\"meter_id[]\" value=\"0\"><select class=\"form-select form-select-sm\" name=\"meter_type[]\" required>' . str_replace('"', '\\"', $defaultMeterTypeOptions) . '</select></td><td><input class=\"form-control form-control-sm\" type=\"text\" name=\"meter_code[]\" placeholder=\"如 WATER-2\" required></td><td><input class=\"form-control form-control-sm\" type=\"text\" name=\"meter_name[]\" placeholder=\"可选名称\"></td><td><input class=\"form-control form-control-sm\" type=\"number\" step=\"0.01\" min=\"0\" name=\"previous_reading[]\" value=\"0.00\" required></td><td><input class=\"form-control form-control-sm\" type=\"number\" step=\"0.01\" min=\"0\" name=\"current_reading[]\" value=\"0.00\" required></td><td><input class=\"form-control form-control-sm\" type=\"number\" step=\"0.0001\" min=\"0\" name=\"unit_price[]\" value=\"0.0000\" required></td><td class=\"text-end text-nowrap usage-cell\">0.00</td><td class=\"text-end text-nowrap fee-cell\">¥0.00</td><td class=\"text-center\"><button type=\"button\" class=\"btn btn-sm btn-outline-danger remove-row-btn\">删除</button></td>";return tr;};'
+            . 'const recalc=()=>{const rent=toNum(byId("rentAmount")?.value);let meterFee=0,warns=[];const rows=body.querySelectorAll("tr[data-meter-row]");rows.forEach((row)=>{const prev=toNum(row.querySelector("[name=\"previous_reading[]\"]")?.value);const cur=toNum(row.querySelector("[name=\"current_reading[]\"]")?.value);const price=toNum(row.querySelector("[name=\"unit_price[]\"]")?.value);const usage=cur-prev;const safeUsage=Math.max(0,usage);const fee=safeUsage*price;const usageCell=row.querySelector(".usage-cell");const feeCell=row.querySelector(".fee-cell");if(usageCell){usageCell.textContent=safeUsage.toFixed(2);}if(feeCell){feeCell.textContent=money(fee);}if(usage<0){warns.push("存在本月读数小于上月读数的表计");}meterFee+=fee;});const total=rent+meterFee;const warnHtml=warns.length>0?"<div class=\"text-danger fw-bold mb-2\">"+warns[0]+"</div>":"";byId("formulaPreview").innerHTML=warnHtml+"<div><strong>预估计量费合计</strong>："+money(meterFee)+"</div><div><strong>预估总额</strong>："+money(rent)+" + "+money(meterFee)+" = "+money(total)+"</div>";};'
             . 'byId("addMeterRowBtn")?.addEventListener("click",()=>{body.appendChild(createRow());recalc();});'
             . 'body.addEventListener("input",(e)=>{if(e.target instanceof HTMLElement){recalc();}});'
             . 'body.addEventListener("click",(e)=>{const target=e.target;if(!(target instanceof HTMLElement)){return;}if(target.classList.contains("remove-row-btn")){const rows=body.querySelectorAll("tr[data-meter-row]");if(rows.length<=1){return;}const tr=target.closest("tr[data-meter-row]");if(tr){tr.remove();recalc();}}});'
@@ -3610,7 +3599,7 @@ class PaymentController
                 }
 
                 $rowsHtml .= '<tr>'
-                    . '<td>' . htmlspecialchars($type === 'water' ? '水表' : '电表', ENT_QUOTES) . '</td>'
+                    . '<td>' . htmlspecialchars($this->meterTypeLabel($type), ENT_QUOTES) . '</td>'
                     . '<td>' . htmlspecialchars((string) ($row['meter_code_snapshot'] ?? ''), ENT_QUOTES) . '</td>'
                     . '<td>' . htmlspecialchars((string) ($row['meter_name_snapshot'] ?? '-'), ENT_QUOTES) . '</td>'
                     . '<td class="text-end">' . number_format((float) ($row['previous_reading'] ?? 0), 2) . '</td>'
@@ -3675,6 +3664,99 @@ class PaymentController
             . $formulaBlock
             . '<div class="mt-3 d-flex gap-2"><a class="btn btn-secondary" href="/payments">返回账单列表</a><button class="btn btn-outline-primary" onclick="window.print()">打印收据</button></div>'
             . '</div></div></div></body></html>';
+    }
+
+    private function getMeterTypeDefinitions(): array
+    {
+        static $cache = null;
+        if (is_array($cache)) {
+            return $cache;
+        }
+
+        $fallback = [
+            ['type_key' => 'water', 'type_name' => '水表', 'default_code_prefix' => 'WATER', 'sort_order' => 10],
+            ['type_key' => 'electric', 'type_name' => '电表', 'default_code_prefix' => 'ELECTRIC', 'sort_order' => 20],
+            ['type_key' => 'gas', 'type_name' => '天然气表', 'default_code_prefix' => 'GAS', 'sort_order' => 30],
+        ];
+
+        try {
+            $rows = db()->fetchAll(
+                'SELECT type_key, type_name, default_code_prefix, sort_order
+                 FROM meter_types
+                 WHERE is_active = 1
+                 ORDER BY sort_order ASC, id ASC'
+            );
+            if (is_array($rows) && $rows !== []) {
+                $cache = $rows;
+                return $cache;
+            }
+        } catch (\Throwable $e) {
+            // Fallback to built-in defaults when migration is not yet applied.
+        }
+
+        $cache = $fallback;
+        return $cache;
+    }
+
+    private function isAllowedMeterType(string $meterType): bool
+    {
+        if ($meterType === '' || !preg_match('/^[a-z][a-z0-9_]{1,29}$/', $meterType)) {
+            return false;
+        }
+
+        foreach ($this->getMeterTypeDefinitions() as $definition) {
+            if ((string) ($definition['type_key'] ?? '') === $meterType) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function meterTypeLabel(string $meterType): string
+    {
+        foreach ($this->getMeterTypeDefinitions() as $definition) {
+            if ((string) ($definition['type_key'] ?? '') === $meterType) {
+                return (string) ($definition['type_name'] ?? $meterType);
+            }
+        }
+
+        return $meterType !== '' ? strtoupper($meterType) : '-';
+    }
+
+    private function buildMeterTypeSelectOptionsHtml(string $selected = ''): string
+    {
+        $html = '';
+        foreach ($this->getMeterTypeDefinitions() as $definition) {
+            $typeKey = (string) ($definition['type_key'] ?? '');
+            if ($typeKey === '') {
+                continue;
+            }
+
+            $typeName = (string) ($definition['type_name'] ?? $typeKey);
+            $html .= '<option value="' . htmlspecialchars($typeKey, ENT_QUOTES) . '"' . ($selected === $typeKey ? ' selected' : '') . '>'
+                . htmlspecialchars($typeName, ENT_QUOTES)
+                . '</option>';
+        }
+
+        return $html;
+    }
+
+    private function getDefaultUnitPriceByMeterType(string $meterType): float
+    {
+        if ($meterType === 'water') {
+            return (float) $this->getSetting('rent.water_unit_price', '0');
+        }
+
+        if ($meterType === 'electric') {
+            return (float) $this->getSetting('rent.electric_unit_price', '0');
+        }
+
+        if ($meterType === 'gas') {
+            return (float) $this->getSetting('rent.gas_unit_price', '0');
+        }
+
+        return 0.0;
     }
 
     private function escapeCsv(string $value): string

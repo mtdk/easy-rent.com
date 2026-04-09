@@ -253,8 +253,8 @@ class ContractController
         $defaultUnitPriceRaw = trim((string) ($_POST['default_unit_price'] ?? '0'));
         $initialReadingRaw = trim((string) ($_POST['initial_reading'] ?? '0'));
 
-        if (!in_array($meterType, ['water', 'electric'], true)) {
-            flash('error', '表计类型仅支持水表或电表');
+        if (!$this->isValidMeterTypeKey($meterType)) {
+            flash('error', '表计类型无效，请先在计量类型表中配置后再使用');
             return Response::redirect('/contracts/' . $id);
         }
 
@@ -1064,7 +1064,7 @@ class ContractController
             }
 
             $meterRows .= '<tr>'
-                . '<td>' . htmlspecialchars((string) (($meter['meter_type'] ?? '') === 'water' ? '水表' : '电表'), ENT_QUOTES) . '</td>'
+                . '<td>' . htmlspecialchars($this->meterTypeLabel((string) ($meter['meter_type'] ?? '')), ENT_QUOTES) . '</td>'
                 . '<td>' . htmlspecialchars((string) ($meter['meter_code'] ?? ''), ENT_QUOTES) . '</td>'
                 . '<td>' . htmlspecialchars((string) ($meter['meter_name'] ?? '-'), ENT_QUOTES) . '</td>'
                 . '<td class="text-end">' . number_format((float) ($meter['default_unit_price'] ?? 0), 4) . '</td>'
@@ -1080,12 +1080,26 @@ class ContractController
 
         $meterForm = '';
         if ($canManage) {
+            $meterTypeOptions = '';
+            foreach ($this->getMeterTypeDefinitions() as $definition) {
+                $typeKey = (string) ($definition['type_key'] ?? '');
+                if ($typeKey === '') {
+                    continue;
+                }
+
+                $meterTypeOptions .= '<option value="' . htmlspecialchars($typeKey, ENT_QUOTES) . '">' . htmlspecialchars((string) ($definition['type_name'] ?? $typeKey), ENT_QUOTES) . '</option>';
+            }
+
+            if ($meterTypeOptions === '') {
+                $meterTypeOptions = '<option value="water">水表</option><option value="electric">电表</option><option value="gas">天然气表</option>';
+            }
+
             $meterForm = '<div class="card mt-3"><div class="card-body">'
                 . '<h6 class="mb-3">添加表计</h6>'
                 . '<form method="POST" action="/contracts/' . (int) $contract['id'] . '/meters">'
                 . '<input type="hidden" name="_token" value="' . csrf_token() . '">'
                 . '<div class="row g-2">'
-                . '<div class="col-md-2"><label class="form-label">类型</label><select class="form-select" name="meter_type" required><option value="water">水表</option><option value="electric">电表</option></select></div>'
+                . '<div class="col-md-2"><label class="form-label">类型</label><select class="form-select" name="meter_type" required>' . $meterTypeOptions . '</select></div>'
                 . '<div class="col-md-3"><label class="form-label">表计编号</label><input class="form-control" name="meter_code" placeholder="如 WATER-2" required></div>'
                 . '<div class="col-md-3"><label class="form-label">表计名称</label><input class="form-control" name="meter_name" placeholder="可选"></div>'
                 . '<div class="col-md-2"><label class="form-label">默认单价</label><input class="form-control" type="number" step="0.0001" min="0" name="default_unit_price" value="0.0000" required></div>'
@@ -1162,5 +1176,63 @@ class ContractController
         }
 
         return '<div class="invalid-feedback d-block">' . htmlspecialchars($message, ENT_QUOTES) . '</div>';
+    }
+
+    private function getMeterTypeDefinitions(): array
+    {
+        static $cache = null;
+        if (is_array($cache)) {
+            return $cache;
+        }
+
+        $fallback = [
+            ['type_key' => 'water', 'type_name' => '水表', 'default_code_prefix' => 'WATER', 'sort_order' => 10],
+            ['type_key' => 'electric', 'type_name' => '电表', 'default_code_prefix' => 'ELECTRIC', 'sort_order' => 20],
+            ['type_key' => 'gas', 'type_name' => '天然气表', 'default_code_prefix' => 'GAS', 'sort_order' => 30],
+        ];
+
+        try {
+            $rows = db()->fetchAll(
+                'SELECT type_key, type_name, default_code_prefix, sort_order
+                 FROM meter_types
+                 WHERE is_active = 1
+                 ORDER BY sort_order ASC, id ASC'
+            );
+            if (is_array($rows) && $rows !== []) {
+                $cache = $rows;
+                return $cache;
+            }
+        } catch (\Throwable $e) {
+            // Fallback to built-in defaults when migration is not yet applied.
+        }
+
+        $cache = $fallback;
+        return $cache;
+    }
+
+    private function isValidMeterTypeKey(string $meterType): bool
+    {
+        if ($meterType === '' || !preg_match('/^[a-z][a-z0-9_]{1,29}$/', $meterType)) {
+            return false;
+        }
+
+        foreach ($this->getMeterTypeDefinitions() as $definition) {
+            if ((string) ($definition['type_key'] ?? '') === $meterType) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function meterTypeLabel(string $meterType): string
+    {
+        foreach ($this->getMeterTypeDefinitions() as $definition) {
+            if ((string) ($definition['type_key'] ?? '') === $meterType) {
+                return (string) ($definition['type_name'] ?? $meterType);
+            }
+        }
+
+        return $meterType !== '' ? strtoupper($meterType) : '-';
     }
 }
