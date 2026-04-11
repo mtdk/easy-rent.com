@@ -340,6 +340,10 @@ class PaymentController
         $this->ensureAuthenticated();
 
         $period = trim((string) ($_GET['period'] ?? date('Y-m')));
+        $billType = trim((string) ($_GET['bill_type'] ?? 'monthly'));
+        if (!in_array($billType, ['monthly', 'checkout'], true)) {
+            $billType = 'monthly';
+        }
         if (!preg_match('/^\d{4}-\d{2}$/', $period)) {
             $period = date('Y-m');
         }
@@ -362,7 +366,7 @@ class PaymentController
             $meterRows = $this->buildMeterRowsForCreate($contractId);
         }
 
-        return Response::html($this->billCreateTemplate($contracts, $selectedContract, $period, $meterRows));
+        return Response::html($this->billCreateTemplate($contracts, $selectedContract, $period, $meterRows, $billType));
     }
 
     public function store(): Response
@@ -375,7 +379,11 @@ class PaymentController
 
         $contractId = (int) ($_POST['contract_id'] ?? 0);
         $period = trim((string) ($_POST['period'] ?? date('Y-m')));
-
+        $billType = trim((string) ($_POST['bill_type'] ?? 'monthly'));
+        if (!in_array($billType, ['monthly', 'checkout'], true)) {
+            $billType = 'monthly';
+        }
+        
         if ($contractId <= 0) {
             throw HttpException::badRequest('合同参数无效');
         }
@@ -390,12 +398,12 @@ class PaymentController
         }
 
         $exists = db()->fetch(
-            'SELECT id FROM rent_payments WHERE contract_id = ? AND payment_period = ? LIMIT 1',
-            [$contractId, $period]
+            'SELECT id FROM rent_payments WHERE contract_id = ? AND payment_period = ? AND bill_type = ? LIMIT 1',
+            [$contractId, $period, $billType]
         );
         if ($exists) {
-            flash('error', '该合同当前周期账单已存在');
-            return Response::redirect('/payments/create?contract_id=' . $contractId . '&period=' . urlencode($period));
+            flash('error', '该合同当前周期已存在相同类型的账单');
+            return Response::redirect('/payments/create?contract_id=' . $contractId . '&period=' . urlencode($period) . '&bill_type=' . urlencode($billType));
         }
 
         $meterEntries = $this->parseMeterEntriesFromRequest($_POST, $contractId);
@@ -466,7 +474,7 @@ class PaymentController
                     'previous_reading' => round((float) $entry['previous_reading'], 2),
                     'current_reading' => round((float) $entry['current_reading'], 2),
                     'usage_amount' => round((float) $entry['usage_amount'], 2),
-                    'unit_price' => round((float) $entry['unit_price'], 4),
+                    'unit_price' => round((float) $entry['unit_price'], 2),
                     'line_amount' => round((float) $entry['line_amount'], 2),
                 ];
             }, $meterEntries),
@@ -503,7 +511,7 @@ class PaymentController
                     'previous_reading' => number_format((float) $entry['previous_reading'], 2, '.', ''),
                     'current_reading' => number_format((float) $entry['current_reading'], 2, '.', ''),
                     'usage_amount' => number_format((float) $entry['usage_amount'], 2, '.', ''),
-                    'unit_price' => number_format((float) $entry['unit_price'], 4, '.', ''),
+                    'unit_price' => number_format((float) $entry['unit_price'], 2, '.', ''),
                     'line_amount' => number_format((float) $entry['line_amount'], 2, '.', ''),
                     'created_at' => date('Y-m-d H:i:s'),
                 ]);
@@ -812,7 +820,7 @@ class PaymentController
             $totalAmountDue = $rentAmount + $waterFee + $electricFee;
 
             $billDetails = [
-                'bill_type' => 'metered_rent',
+                'bill_type' => $billType,
                 'bill_schema_version' => 2,
                 'auto_generated' => true,
                 'formula' => [
@@ -837,7 +845,7 @@ class PaymentController
                         'previous_reading' => round((float) $entry['previous_reading'], 2),
                         'current_reading' => round((float) $entry['current_reading'], 2),
                         'usage_amount' => round((float) $entry['usage_amount'], 2),
-                        'unit_price' => round((float) $entry['unit_price'], 4),
+                        'unit_price' => round((float) $entry['unit_price'], 2),
                         'line_amount' => round((float) $entry['line_amount'], 2),
                     ];
                 }, $meterEntries),
@@ -851,6 +859,7 @@ class PaymentController
                     'contract_id' => $contractId,
                     'payment_number' => $this->generatePaymentNumber(),
                     'payment_period' => $period,
+                    'bill_type' => $billType,
                     'due_date' => $dueDate,
                     'amount_due' => number_format($totalAmountDue, 2, '.', ''),
                     'payment_method' => 'bank_transfer',
@@ -873,12 +882,34 @@ class PaymentController
                         'previous_reading' => number_format((float) $entry['previous_reading'], 2, '.', ''),
                         'current_reading' => number_format((float) $entry['current_reading'], 2, '.', ''),
                         'usage_amount' => number_format((float) $entry['usage_amount'], 2, '.', ''),
-                        'unit_price' => number_format((float) $entry['unit_price'], 4, '.', ''),
+                        'unit_price' => number_format((float) $entry['unit_price'], 2, '.', ''),
                         'line_amount' => number_format((float) $entry['line_amount'], 2, '.', ''),
                         'created_at' => date('Y-m-d H:i:s'),
                     ]);
                 }
-
+    
+                // 如果是退租结算账单，则将合同状态更新为终止
+                if ($billType === 'checkout') {
+                    $terminationDate = date('Y-m-d');
+                    $terminationReason = trim((string) ($_POST['termination_reason'] ?? '退租结算'));
+                    db()->update('contracts', [
+                        'contract_status' => 'terminated',
+                        'termination_date' => $terminationDate,
+                        'termination_reason' => $terminationReason,
+                        'updated_at' => date('Y-m-d H:i:s'),
+                    ], ['id' => $contractId]);
+                }
+                // 如果是退租结算账单，则将合同状态更新为终止
+                if ($billType === 'checkout') {
+                    $terminationDate = date('Y-m-d');
+                    $terminationReason = trim((string) ($_POST['termination_reason'] ?? '退租结算'));
+                    db()->update('contracts', [
+                        'contract_status' => 'terminated',
+                        'termination_date' => $terminationDate,
+                        'termination_reason' => $terminationReason,
+                        'updated_at' => date('Y-m-d H:i:s'),
+                    ], ['id' => $contractId]);
+                }
                 $pdo->commit();
             } catch (\Throwable $e) {
                 if ($pdo->inTransaction()) {
@@ -1813,6 +1844,7 @@ class PaymentController
                 rp.notes,
                 c.contract_number,
                 c.tenant_name,
+                c.deposit_amount,
                 p.property_name,
                 p.owner_id
             FROM rent_payments rp
@@ -1858,7 +1890,7 @@ class PaymentController
                 p.owner_id
             FROM contracts c
             JOIN properties p ON p.id = c.property_id
-            WHERE c.contract_status = 'active'
+            WHERE c.contract_status IN ('active', 'pending')
         ";
 
         $params = [];
@@ -1886,7 +1918,7 @@ class PaymentController
             FROM contracts c
             JOIN properties p ON p.id = c.property_id
             WHERE c.id = ?
-              AND c.contract_status = 'active'
+              AND c.contract_status IN ('active', 'pending')
         ";
 
         $params = [$contractId];
@@ -1926,7 +1958,7 @@ class PaymentController
                 'meter_type' => $typeKey,
                 'meter_code' => $prefix . '-1',
                 'meter_name' => '默认' . $typeName,
-                'default_unit_price' => number_format($this->getDefaultUnitPriceByMeterType($typeKey), 4, '.', ''),
+                'default_unit_price' => number_format($this->getDefaultUnitPriceByMeterType($typeKey), 2, '.', ''),
                 'initial_reading' => number_format(0, 2, '.', ''),
                 'is_active' => 1,
                 'sort_order' => $sortOrder > 0 ? $sortOrder : 10,
@@ -1974,7 +2006,7 @@ class PaymentController
                 'meter_name' => (string) ($meter['meter_name'] ?? ''),
                 'previous_reading' => round($previousReading, 2),
                 'current_reading' => round($previousReading, 2),
-                'unit_price' => round($unitPrice, 4),
+                'unit_price' => round($unitPrice, 2),
             ];
         }
 
@@ -2052,7 +2084,7 @@ class PaymentController
 
                 db()->update('contract_meters', [
                     'meter_name' => $meterName !== '' ? $meterName : null,
-                    'default_unit_price' => number_format($unitPrice, 4, '.', ''),
+                    'default_unit_price' => number_format($unitPrice, 2, '.', ''),
                     'updated_at' => $now,
                 ], ['id' => $meterId]);
             } else {
@@ -2069,7 +2101,7 @@ class PaymentController
                         'meter_type' => $meterType,
                         'meter_code' => $meterCode,
                         'meter_name' => $meterName !== '' ? $meterName : null,
-                        'default_unit_price' => number_format($unitPrice, 4, '.', ''),
+                        'default_unit_price' => number_format($unitPrice, 2, '.', ''),
                         'initial_reading' => number_format($previous, 2, '.', ''),
                         'is_active' => 1,
                         'sort_order' => ($i + 1) * 10,
@@ -2397,80 +2429,86 @@ class PaymentController
         $sourcePeriod = (string) ($filters['source_period'] ?? '');
         $meterDetail = (string) ($filters['meter_detail'] ?? '');
 
+        // 计算统计信息
+        $totalDue = 0.0;
+        $totalPaid = 0.0;
+        $totalUnpaid = 0.0;
+        $pendingCount = 0;
+        $overdueCount = 0;
+        $paidCount = 0;
+        foreach ($payments as $payment) {
+            $due = (float) $payment['amount_due'];
+            $paid = (float) $payment['amount_paid'] ?? 0.0;
+            $paymentStatus = (string) $payment['payment_status'];
+            $totalDue += $due;
+            $totalPaid += $paid;
+            $totalUnpaid += ($due - $paid);
+            if ($paymentStatus === 'pending') $pendingCount++;
+            elseif ($paymentStatus === 'overdue') $overdueCount++;
+            elseif ($paymentStatus === 'paid') $paidCount++;
+        }
+
         $rows = '';
         foreach ($payments as $payment) {
             $id = (int) $payment['id'];
+            $statusBadge = $this->paymentStatusBadge((string) $payment['payment_status']);
+            $dueDate = (string) $payment['due_date'];
+            $dueDateClass = '';
+            if ($payment['payment_status'] === 'overdue') {
+                $dueDateClass = 'text-danger fw-bold';
+            } elseif ($payment['payment_status'] === 'pending') {
+                $dueDateClass = 'text-warning';
+            }
 
             $rows .= '<tr>'
                 . '<td data-label="ID">' . $id . '</td>'
-                . '<td data-label="支付编号">' . htmlspecialchars((string) $payment['payment_number']) . '</td>'
-                . '<td data-label="租客">' . htmlspecialchars((string) $payment['tenant_name']) . '</td>'
+                . '<td data-label="支付编号"><span class="font-monospace small">' . htmlspecialchars((string) $payment['payment_number']) . '</span></td>'
+                . '<td data-label="租客"><strong>' . htmlspecialchars((string) $payment['tenant_name']) . '</strong></td>'
                 . '<td data-label="房产">' . htmlspecialchars((string) $payment['property_name']) . '</td>'
-                . '<td data-label="到期日">' . htmlspecialchars((string) $payment['due_date']) . '</td>'
-                . '<td data-label="应付">¥' . number_format((float) $payment['amount_due'], 2) . '</td>'
-                . '<td data-label="状态">' . $this->paymentStatusBadge((string) $payment['payment_status']) . '</td>'
-                . '<td data-label="操作" class="bill-actions"><div class="bill-actions-wrap"><a class="btn btn-sm btn-outline-primary" href="/payments/' . $id . '/receipt">查看</a></div></td>'
+                . '<td data-label="到期日" class="' . $dueDateClass . '">' . htmlspecialchars($dueDate) . '</td>'
+                . '<td data-label="应付"><span class="fw-semibold">¥' . number_format((float) $payment['amount_due'], 2) . '</span></td>'
+                . '<td data-label="状态">' . $statusBadge . '</td>'
+                . '<td data-label="操作" class="bill-actions"><div class="bill-actions-wrap">'
+                . '<a class="btn btn-sm btn-outline-primary" href="/payments/' . $id . '/receipt" title="查看收据"><i class="bi bi-receipt"></i></a>'
+                . '</div></td>'
                 . '</tr>';
         }
 
         if ($rows === '') {
-            $rows = '<tr><td colspan="8" class="text-center text-muted">暂无账单数据</td></tr>';
+            $rows = '<tr><td colspan="8" class="text-center text-muted py-4"><i class="bi bi-inbox fs-4"></i><br>暂无账单数据</td></tr>';
         }
 
         $pageStyles = '<style>'
-            . '.payments-list-page .card { border: 0; box-shadow: 0 0.25rem 1rem rgba(15, 23, 42, 0.08); }'
-            . '.payments-list-page .page-head { background: linear-gradient(120deg, #eef6ff, #e6f7f2); color: #0f172a; border: 1px solid #d8e7f8; border-radius: 1rem; padding: 1rem 1.1rem; margin-bottom: 0.9rem; }'
-            . '.payments-list-page .page-head .subtitle { color: #334155; margin: 0.25rem 0 0; font-size: 0.9rem; }'
-            . '.payments-list-page .filter-panel .card-body { padding: 0.85rem; }'
-            . '.payments-list-page .filter-form .form-label { font-size: 0.78rem; color: #64748b; margin-bottom: 0.22rem; }'
-            . '.payments-list-page .filter-form .form-select, .payments-list-page .filter-form .form-control { border-color: #cbd5e1; }'
-            . '.payments-list-page .filter-form .form-select:focus, .payments-list-page .filter-form .form-control:focus { border-color: #0f766e; box-shadow: 0 0 0 0.2rem rgba(15, 118, 110, 0.12); }'
-            . '.payments-list-page .filter-actions { display: flex; gap: 0.45rem; flex-wrap: wrap; }'
-            . '.payments-list-page .filter-actions .btn { min-width: 118px; }'
-            . '.payments-list-page .preset-panel { margin-top: 0.65rem; }'
-            . '.payments-list-page .preset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.55rem; }'
-            . '.payments-list-page .preset-card { display: block; text-decoration: none; border: 1px solid #dbe7f6; border-radius: 0.75rem; background: linear-gradient(120deg, #f8fbff, #f2f8ff); padding: 0.6rem 0.7rem; transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }'
-            . '.payments-list-page .preset-card:hover { transform: translateY(-1px); border-color: #bcd0ee; box-shadow: 0 0.3rem 0.75rem rgba(15, 23, 42, 0.09); }'
-            . '.payments-list-page .preset-card .preset-title { font-size: 0.83rem; font-weight: 600; color: #0f172a; }'
-            . '.payments-list-page .preset-card .preset-desc { font-size: 0.73rem; color: #64748b; margin-top: 0.15rem; }'
-            . '.payments-list-page .generator-panel .card-body { padding: 0.8rem 0.85rem; }'
-            . '.payments-list-page .generator-form .form-label { font-size: 0.78rem; color: #64748b; margin-bottom: 0.22rem; }'
-            . '.payments-list-page .table thead th { white-space: nowrap; font-size: 0.82rem; }'
-            . '.payments-list-page .table tbody td { vertical-align: middle; }'
-            . '.payments-list-page .table tbody tr:hover { background: #f8fafc; }'
-            . '.payments-list-page .bill-actions { min-width: 96px; }'
-            . '.payments-list-page .bill-actions-wrap { display: flex; align-items: center; justify-content: flex-start; }'
-            . '.payments-list-page .payments-toolbar { width: 100%; display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }'
-            . '.payments-list-page .payments-toolbar .btn { flex: 1 1 calc(50% - 0.5rem); }'
+            . '.payments-list-page .header-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 1rem; }'
+            . '.payments-list-page .stat-card { border: none; border-radius: 0.75rem; box-shadow: 0 4px 12px rgba(0,0,0,0.05); transition: transform 0.2s; }'
+            . '.payments-list-page .stat-card:hover { transform: translateY(-2px); }'
+            . '.payments-list-page .filter-card .card-body { padding: 1.25rem; }'
+            . '.payments-list-page .table thead th { border-bottom: 2px solid #dee2e6; font-weight: 600; color: #495057; }'
+            . '.payments-list-page .table tbody tr { transition: background-color 0.15s; }'
+            . '.payments-list-page .table tbody tr:hover { background-color: rgba(0,123,255,0.05); }'
+            . '.payments-list-page .bill-actions .btn { padding: 0.25rem 0.5rem; margin-right: 0.25rem; }'
+            . '.payments-list-page .pagination .page-link { border-radius: 0.5rem; margin: 0 0.125rem; }'
             . '@media (max-width: 767.98px) {'
-            . '  .payments-list-page .page-head { padding: 0.85rem 0.9rem; }'
-            . '  .payments-list-page .page-head .subtitle { font-size: 0.82rem; }'
-            . '  .payments-list-page .filter-panel .card-body { padding: 0.65rem; }'
-            . '  .payments-list-page .filter-actions .btn { width: 100%; min-width: 0; }'
-            . '  .payments-list-page .preset-grid { grid-template-columns: 1fr; }'
-            . '  .payments-list-page .generator-panel .card-body { padding: 0.65rem; }'
+            . '  .payments-list-page .header-card .display-4 { font-size: 2rem; }'
+            . '  .payments-list-page .stat-card .h5 { font-size: 1rem; }'
             . '  .payments-list-page .mobile-table thead { display: none; }'
-            . '  .payments-list-page .mobile-table tbody tr { display: block; border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 0.6rem 0.75rem; margin-bottom: 0.75rem; background: #fff; }'
-            . '  .payments-list-page .mobile-table tbody td { display: flex; justify-content: space-between; gap: 0.75rem; border: 0 !important; padding: 0.35rem 0; }'
-            . '  .payments-list-page .mobile-table tbody td::before { content: attr(data-label); font-size: 0.78rem; color: #64748b; flex: 0 0 38%; }'
-            . '  .payments-list-page .mobile-table tbody td[colspan] { display: block; text-align: center; }'
-            . '  .payments-list-page .mobile-table tbody td[colspan]::before { display: none; }'
-            . '  .payments-list-page .bill-actions { min-width: 0; }'
-            . '  .payments-list-page .bill-actions-wrap { justify-content: stretch; }'
-            . '  .payments-list-page .bill-actions-wrap .btn { width: 100%; }'
+            . '  .payments-list-page .mobile-table tbody tr { display: block; border: 1px solid #dee2e6; border-radius: 0.75rem; padding: 1rem; margin-bottom: 1rem; }'
+            . '  .payments-list-page .mobile-table tbody td { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border: none; }'
+            . '  .payments-list-page .mobile-table tbody td::before { content: attr(data-label); font-weight: 600; color: #6c757d; margin-right: 1rem; }'
+            . '  .payments-list-page .mobile-table .bill-actions { justify-content: flex-end; }'
             . '}'
             . '</style>';
 
         $generated = isset($_GET['generated']) ? (int) $_GET['generated'] : null;
         $notice = '';
         if ($generated !== null) {
-            $notice = '<div class="alert alert-success">账单生成完成，本次新增 ' . $generated . ' 条</div>';
+            $notice = '<div class="alert alert-success d-flex align-items-center" role="alert"><i class="bi bi-check-circle-fill me-2"></i>账单生成完成，本次新增 ' . $generated . ' 条</div>';
         }
 
         $drilldownNotice = '';
         if ($source === 'reconciliation') {
             $periodHint = $sourcePeriod !== '' ? '（账期：' . htmlspecialchars($sourcePeriod) . '）' : '';
-            $drilldownNotice = '<div class="alert alert-info py-2">当前列表来自对账页钻取' . $periodHint . '</div>';
+            $drilldownNotice = '<div class="alert alert-info d-flex align-items-center"><i class="bi bi-info-circle me-2"></i>当前列表来自对账页钻取' . $periodHint . '</div>';
         }
 
         $queryString = http_build_query([
@@ -2501,7 +2539,7 @@ class PaymentController
             'meter_detail' => '1',
         ]);
         $meterTypesQuickAction = $isAdmin
-            ? '<a href="/meter-types" class="btn btn-outline-warning">计量类型管理</a>'
+            ? '<a href="/meter-types" class="btn btn-outline-warning"><i class="bi bi-speedometer2"></i> 计量类型管理</a>'
             : '';
 
         $currentMonth = date('Y-m');
@@ -2529,15 +2567,18 @@ class PaymentController
 
         $paginationHtml = '';
         if ($lastPage > 1) {
-            $windowSize = 10;
-            $startPage = $currentPage;
+            $windowSize = 5;
+            $startPage = max(1, $currentPage - floor($windowSize / 2));
             $endPage = min($lastPage, $startPage + $windowSize - 1);
+            if ($endPage - $startPage + 1 < $windowSize) {
+                $startPage = max(1, $endPage - $windowSize + 1);
+            }
 
-            $paginationHtml .= '<nav aria-label="Page navigation example"><ul class="pagination justify-content-center mb-0">';
+            $paginationHtml .= '<nav aria-label="Page navigation"><ul class="pagination justify-content-center mb-0">';
 
             $prevDisabled = $currentPage <= 1 ? ' disabled' : '';
             $prevQuery = http_build_query($paginationBase + ['page' => max(1, $currentPage - 1)]);
-            $paginationHtml .= '<li class="page-item' . $prevDisabled . '"><a class="page-link" href="/payments?' . htmlspecialchars($prevQuery, ENT_QUOTES) . '">Previous</a></li>';
+            $paginationHtml .= '<li class="page-item' . $prevDisabled . '"><a class="page-link" href="/payments?' . htmlspecialchars($prevQuery, ENT_QUOTES) . '"><i class="bi bi-chevron-left"></i></a></li>';
 
             if ($startPage > 1) {
                 $firstQuery = http_build_query($paginationBase + ['page' => 1]);
@@ -2563,7 +2604,7 @@ class PaymentController
 
             $nextDisabled = $currentPage >= $lastPage ? ' disabled' : '';
             $nextQuery = http_build_query($paginationBase + ['page' => min($lastPage, $currentPage + 1)]);
-            $paginationHtml .= '<li class="page-item' . $nextDisabled . '"><a class="page-link" href="/payments?' . htmlspecialchars($nextQuery, ENT_QUOTES) . '">Next</a></li>';
+            $paginationHtml .= '<li class="page-item' . $nextDisabled . '"><a class="page-link" href="/payments?' . htmlspecialchars($nextQuery, ENT_QUOTES) . '"><i class="bi bi-chevron-right"></i></a></li>';
             $paginationHtml .= '</ul></nav>';
         }
 
@@ -2573,64 +2614,196 @@ class PaymentController
             . '</head><body>'
             . $navigation
             . '<div class="container mt-4 payments-list-page">'
-            . '<div class="page-head">'
-            . '<div class="d-flex justify-content-between align-items-center flex-wrap gap-2">'
-            . '<h3 class="mb-0">支付与账单</h3>'
-            . '<div class="d-flex gap-2 payments-toolbar"><a href="/payments/reconciliation" class="btn btn-outline-dark">月度对账</a><a href="/payments/create" class="btn btn-outline-primary">新建月度账单</a>' . $meterTypesQuickAction . '<a href="/payments/export?' . htmlspecialchars($queryString, ENT_QUOTES) . '" class="btn btn-outline-success">导出CSV</a><a href="/payments/export?' . htmlspecialchars($detailExportQuery, ENT_QUOTES) . '" class="btn btn-outline-success">导出表计明细CSV</a><a href="/dashboard" class="btn btn-outline-secondary">返回仪表板</a></div>'
+            . '<div class="card header-card mb-4">'
+            . '<div class="card-body">'
+            . '<div class="row align-items-center">'
+            . '<div class="col-md-8">'
+            . '<h1 class="display-4 fw-bold">支付与账单</h1>'
+            . '<p class="lead mb-0">集中查看账单状态、收款进度与金额区间，支持按条件筛选和快速导出。</p>'
             . '</div>'
-            . '<p class="subtitle">集中查看账单状态、收款进度与金额区间，支持按条件筛选和快速导出。</p>'
+            . '<div class="col-md-4 text-end">'
+            . '<div class="btn-group">'
+            . '<a href="/payments/reconciliation" class="btn btn-light"><i class="bi bi-calendar-check"></i> 月度对账</a>'
+            . '<a href="/payments/create" class="btn btn-light"><i class="bi bi-plus-circle"></i> 新建账单</a>'
+            . '<a href="/payments/export?' . htmlspecialchars($queryString, ENT_QUOTES) . '" class="btn btn-light"><i class="bi bi-download"></i> 导出CSV</a>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
             . '</div>'
             . $notice
             . $drilldownNotice
-            . '<div class="card filter-panel mb-2"><div class="card-body">'
-            . '<form id="paymentsFilterForm" class="filter-form" method="GET" action="/payments">'
+            . '<div class="row mb-4">'
+            . '<div class="col-md-3">'
+            . '<div class="card stat-card border-primary">'
+            . '<div class="card-body">'
+            . '<h5 class="card-title text-primary"><i class="bi bi-receipt"></i> 总应收</h5>'
+            . '<p class="card-text display-6">¥' . number_format($totalDue, 2) . '</p>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '<div class="col-md-3">'
+            . '<div class="card stat-card border-success">'
+            . '<div class="card-body">'
+            . '<h5 class="card-title text-success"><i class="bi bi-cash-stack"></i> 总实收</h5>'
+            . '<p class="card-text display-6">¥' . number_format($totalPaid, 2) . '</p>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '<div class="col-md-3">'
+            . '<div class="card stat-card border-danger">'
+            . '<div class="card-body">'
+            . '<h5 class="card-title text-danger"><i class="bi bi-exclamation-triangle"></i> 总未收</h5>'
+            . '<p class="card-text display-6">¥' . number_format($totalUnpaid, 2) . '</p>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '<div class="col-md-3">'
+            . '<div class="card stat-card border-info">'
+            . '<div class="card-body">'
+            . '<h5 class="card-title text-info"><i class="bi bi-list-check"></i> 账单状态</h5>'
+            . '<p class="card-text"><span class="badge bg-warning">待支付 ' . $pendingCount . '</span> <span class="badge bg-danger">逾期 ' . $overdueCount . '</span> <span class="badge bg-success">已支付 ' . $paidCount . '</span></p>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '<div class="card filter-card mb-4">'
+            . '<div class="card-header bg-light">'
+            . '<h5 class="mb-0"><i class="bi bi-funnel"></i> 筛选条件</h5>'
+            . '</div>'
+            . '<div class="card-body">'
+            . '<form id="paymentsFilterForm" method="GET" action="/payments">'
             . '<input type="hidden" name="bom" value="' . htmlspecialchars($bom) . '">'
             . '<input type="hidden" name="source" value="' . htmlspecialchars($source) . '">'
             . '<input type="hidden" name="source_period" value="' . htmlspecialchars($sourcePeriod) . '">'
-            . '<div class="row g-2">'
-            . '<div class="col-md-4"><label class="form-label">关键词</label><input class="form-control" type="search" name="keyword" placeholder="租客/房号/房产名" value="' . htmlspecialchars($keyword) . '"></div>'
-            . '<div class="col-md-2"><label class="form-label">账期</label><input class="form-control" type="month" name="period" value="' . htmlspecialchars($period) . '" title="精确账期"></div>'
-            . '<div class="col-md-2"><label class="form-label">起始账期</label><input class="form-control" type="month" name="period_from" value="' . htmlspecialchars($periodFrom) . '" title="起始账期"></div>'
-            . '<div class="col-md-2"><label class="form-label">结束账期</label><input class="form-control" type="month" name="period_to" value="' . htmlspecialchars($periodTo) . '" title="结束账期"></div>'
-            . '<div class="col-md-2"><label class="form-label">状态</label><select class="form-select" name="status">'
+            . '<div class="row g-3">'
+            . '<div class="col-md-3">'
+            . '<label class="form-label">关键词</label>'
+            . '<input class="form-control" type="search" name="keyword" placeholder="租客/房号/房产名" value="' . htmlspecialchars($keyword) . '">'
+            . '</div>'
+            . '<div class="col-md-2">'
+            . '<label class="form-label">账期</label>'
+            . '<input class="form-control" type="month" name="period" value="' . htmlspecialchars($period) . '">'
+            . '</div>'
+            . '<div class="col-md-2">'
+            . '<label class="form-label">起始账期</label>'
+            . '<input class="form-control" type="month" name="period_from" value="' . htmlspecialchars($periodFrom) . '">'
+            . '</div>'
+            . '<div class="col-md-2">'
+            . '<label class="form-label">结束账期</label>'
+            . '<input class="form-control" type="month" name="period_to" value="' . htmlspecialchars($periodTo) . '">'
+            . '</div>'
+            . '<div class="col-md-2">'
+            . '<label class="form-label">状态</label>'
+            . '<select class="form-select" name="status">'
             . '<option value="">全部状态</option>'
             . '<option value="pending"' . ($status === 'pending' ? ' selected' : '') . '>待支付</option>'
             . '<option value="overdue"' . ($status === 'overdue' ? ' selected' : '') . '>逾期</option>'
             . '<option value="paid"' . ($status === 'paid' ? ' selected' : '') . '>已支付</option>'
             . '<option value="partial"' . ($status === 'partial' ? ' selected' : '') . '>部分支付</option>'
             . '<option value="unpaid"' . ($status === 'unpaid' ? ' selected' : '') . '>全部未收</option>'
-            . '</select></div>'
+            . '</select>'
             . '</div>'
-            . '<div class="row g-2 mt-1">'
-            . '<div class="col-md-3"><label class="form-label">最低金额</label><input class="form-control" type="number" step="0.01" min="0" name="amount_min" placeholder="最低金额" value="' . htmlspecialchars($amountMin) . '"></div>'
-            . '<div class="col-md-3"><label class="form-label">最高金额</label><input class="form-control" type="number" step="0.01" min="0" name="amount_max" placeholder="最高金额" value="' . htmlspecialchars($amountMax) . '"></div>'
-            . '<div class="col-md-6 d-flex align-items-end"><div class="filter-actions w-100">'
-            . '<button class="btn btn-outline-primary" type="submit">筛选</button>'
-            . '<a class="btn btn-outline-secondary" data-filter-reset="payments" href="/payments">重置</a>'
-            . '</div></div>'
-            . '</div>'
-            . '<div class="preset-panel">'
-            . '<div class="text-muted small mb-2">常用预设：</div>'
-            . '<div class="preset-grid">'
-            . '<a class="preset-card" href="/payments?' . htmlspecialchars($presetUnpaidCurrentMonth, ENT_QUOTES) . '"><div class="preset-title">本月待收</div><div class="preset-desc">快速查看本月未收账单</div></a>'
-            . '<a class="preset-card" href="/payments?' . htmlspecialchars($presetOverdueCurrentMonth, ENT_QUOTES) . '"><div class="preset-title">本月逾期</div><div class="preset-desc">优先处理逾期账单项目</div></a>'
-            . '<a class="preset-card" href="/payments?' . htmlspecialchars($presetPaidAll, ENT_QUOTES) . '"><div class="preset-title">全部已收</div><div class="preset-desc">查看已完成收款记录</div></a>'
+            . '<div class="col-md-1 d-flex align-items-end">'
+            . '<button class="btn btn-primary w-100" type="submit"><i class="bi bi-search"></i></button>'
             . '</div>'
             . '</div>'
-            . '</form></div></div>'
-            . '<div class="card generator-panel mb-3"><div class="card-body">'
-            . '<form class="row g-2 generator-form" method="POST" action="/payments/generate">'
-            . '<input type="hidden" name="_token" value="' . csrf_token() . '">'
-            . '<div class="col-md-4"><label class="form-label">生成账期</label><input class="form-control" type="month" name="period" value="' . htmlspecialchars($period !== '' ? $period : date('Y-m')) . '" required></div>'
-            . '<div class="col-md-4 d-grid align-self-end"><button class="btn btn-primary" type="submit">生成当期账单</button></div>'
-            . '</form></div></div>'
-            . '<div class="mb-2"><small class="text-muted">共 ' . $total . ' 条，当前第 ' . $currentPage . '/' . $lastPage . ' 页，每页 ' . $perPage . ' 条</small></div>'
-            . '<div class="card"><div class="card-body table-responsive"><table class="table table-striped mobile-table"><thead><tr>'
-                . '<th>ID</th><th>支付编号</th><th>租客</th><th>房产</th><th>到期日</th><th>应付</th><th>状态</th><th>操作</th>'
-            . '</tr></thead><tbody>' . $rows . '</tbody></table></div></div>'
-            . '<div class="mt-3">' . $paginationHtml . '</div>'
-                . '<script>(function(){var storageKey="easyrent:filters:payments:index";var form=document.getElementById("paymentsFilterForm");if(!form||!window.localStorage){return;}var fields=["keyword","period","period_from","period_to","status","amount_min","amount_max"];var hasQueryValues=false;var params=new URLSearchParams(window.location.search);for(var i=0;i<fields.length;i++){if(params.has(fields[i])&&params.get(fields[i])!==""){hasQueryValues=true;break;}}if(!hasQueryValues){try{var raw=localStorage.getItem(storageKey);if(raw){var saved=JSON.parse(raw);for(var j=0;j<fields.length;j++){var name=fields[j];var input=form.elements[name];if(!input){continue;}var currentValue=typeof input.value==="string"?input.value:"";if(currentValue!==""){continue;}if(Object.prototype.hasOwnProperty.call(saved,name)&&typeof saved[name]==="string"){input.value=saved[name];}}}}catch(e){}}form.addEventListener("submit",function(){var payload={};for(var k=0;k<fields.length;k++){var key=fields[k];var el=form.elements[key];if(!el){continue;}var value=typeof el.value==="string"?el.value.trim():"";if(value!==""){payload[key]=value;}}if(Object.keys(payload).length>0){localStorage.setItem(storageKey,JSON.stringify(payload));}else{localStorage.removeItem(storageKey);}});var resetLink=form.querySelector("a[data-filter-reset=\"payments\"]");if(resetLink){resetLink.addEventListener("click",function(){localStorage.removeItem(storageKey);});}})();</script>'
-            . '</div></body></html>';
+            . '<div class="row g-3 mt-2">'
+            . '<div class="col-md-3">'
+            . '<label class="form-label">最低金额</label>'
+            . '<input class="form-control" type="number" step="0.01" min="0" name="amount_min" placeholder="最低金额" value="' . htmlspecialchars($amountMin) . '">'
+            . '</div>'
+            . '<div class="col-md-3">'
+            . '<label class="form-label">最高金额</label>'
+            . '<input class="form-control" type="number" step="0.01" min="0" name="amount_max" placeholder="最高金额" value="' . htmlspecialchars($amountMax) . '">'
+            . '</div>'
+            . '<div class="col-md-6 d-flex align-items-end justify-content-end">'
+            . '<a class="btn btn-outline-secondary me-2" href="/payments">重置筛选</a>'
+            . '<div class="btn-group" role="group">'
+            . '<a class="btn btn-outline-info" href="/payments?' . htmlspecialchars($presetUnpaidCurrentMonth, ENT_QUOTES) . '">本月待收</a>'
+            . '<a class="btn btn-outline-danger" href="/payments?' . htmlspecialchars($presetOverdueCurrentMonth, ENT_QUOTES) . '">本月逾期</a>'
+            . '<a class="btn btn-outline-success" href="/payments?' . htmlspecialchars($presetPaidAll, ENT_QUOTES) . '">全部已收</a>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '</form>'
+            . '</div>'
+            . '</div>'
+            . '<div class="card mb-3">'
+            . '<div class="card-header bg-light d-flex justify-content-between align-items-center">'
+            . '<h5 class="mb-0"><i class="bi bi-table"></i> 账单列表</h5>'
+            . '<small class="text-muted">共 ' . $total . ' 条，当前第 ' . $currentPage . '/' . $lastPage . ' 页，每页 ' . $perPage . ' 条</small>'
+            . '</div>'
+            . '<div class="card-body p-0">'
+            . '<div class="table-responsive">'
+            . '<table class="table table-hover mb-0 mobile-table">'
+            . '<thead class="table-light">'
+            . '<tr>'
+            . '<th>ID</th>'
+            . '<th>支付编号</th>'
+            . '<th>租客</th>'
+            . '<th>房产</th>'
+            . '<th>到期日</th>'
+            . '<th>应付</th>'
+            . '<th>状态</th>'
+            . '<th>操作</th>'
+            . '</tr>'
+            . '</thead>'
+            . '<tbody>' . $rows . '</tbody>'
+            . '</table>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '<div class="d-flex justify-content-between align-items-center">'
+            . '<div>'
+            . $paginationHtml
+            . '</div>'
+            . '<div class="text-muted small">'
+            . '快速操作: ' . $meterTypesQuickAction . ' <a href="/dashboard" class="btn btn-sm btn-outline-secondary ms-2">返回仪表板</a>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '<script>'
+            . '(function(){'
+            . 'var form = document.getElementById("paymentsFilterForm");'
+            . 'if (!form) return;'
+            . 'var fields = ["keyword","period","period_from","period_to","status","amount_min","amount_max"];'
+            . 'var storageKey = "easyrent:filters:payments:index";'
+            . 'var hasQuery = false;'
+            . 'var params = new URLSearchParams(window.location.search);'
+            . 'for (var i = 0; i < fields.length; i++) {'
+            . '  if (params.has(fields[i]) && params.get(fields[i]) !== "") { hasQuery = true; break; }'
+            . '}'
+            . 'if (!hasQuery) {'
+            . '  try {'
+            . '    var saved = JSON.parse(localStorage.getItem(storageKey));'
+            . '    if (saved) {'
+            . '      fields.forEach(function(name) {'
+            . '        var input = form.elements[name];'
+            . '        if (!input) return;'
+            . '        var current = input.value.trim();'
+            . '        if (current === "" && saved[name]) input.value = saved[name];'
+            . '      });'
+            . '    }'
+            . '  } catch(e) {}'
+            . '}'
+            . 'form.addEventListener("submit", function() {'
+            . '  var payload = {};'
+            . '  fields.forEach(function(name) {'
+            . '    var el = form.elements[name];'
+            . '    if (!el) return;'
+            . '    var val = el.value.trim();'
+            . '    if (val !== "") payload[name] = val;'
+            . '  });'
+            . '  if (Object.keys(payload).length > 0) {'
+            . '    localStorage.setItem(storageKey, JSON.stringify(payload));'
+            . '  } else {'
+            . '    localStorage.removeItem(storageKey);'
+            . '  }'
+            . '});'
+            . '})();'
+            . '</script>'
+            . '</body></html>';
     }
 
     private function reconciliationTemplate(array $rows, array $filters, array $meterSummaryRows = []): string
@@ -2786,15 +2959,105 @@ class PaymentController
         $printFooter = '<div class="print-footer" style="display:none;"><span>收租管理系统 · 对账打印</span><span>导出时间：' . date('Y-m-d H:i') . '</span><span>页码：<span class="print-page-number"></span></span></div>';
         $copyScript = '<script>(function(){const btn=document.getElementById("copySummaryRefBtn");const ref=document.querySelector(".summary-ref-inline");const hint=document.getElementById("copySummaryRefHint");if(!btn||!ref||!hint){return;}let clearTimer=null;const setHint=function(text,colorClass){if(clearTimer!==null){clearTimeout(clearTimer);clearTimer=null;}if(text===""){hint.className="small copy-hint text-muted";clearTimer=setTimeout(function(){hint.textContent="";},260);return;}hint.textContent=text;hint.className="small copy-hint show "+colorClass;};const doCopy=async function(){const text=(ref.textContent||"").trim();if(text===""){return;}try{if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(text);}else{const ta=document.createElement("textarea");ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand("copy");ta.remove();}btn.textContent="已复制";setHint("已复制到剪贴板","text-success");setTimeout(function(){btn.textContent="复制";setHint("","text-muted");},1400);}catch(e){btn.textContent="复制失败";setHint("复制失败，请手动复制","text-danger");setTimeout(function(){btn.textContent="复制";setHint("","text-muted");},1600);}};btn.addEventListener("click",doCopy);document.addEventListener("keydown",function(e){if(e.altKey&&e.shiftKey&&(e.key==="C"||e.key==="c")){e.preventDefault();doCopy();setHint("已通过快捷键 Alt+Shift+C 触发复制","text-info");}});})();</script>';
 
-        return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>月度对账</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css">' . $printStyles . $mobileStyles . '</head><body>'
+        // 增强样式
+        $enhancedStyles = '<style>
+            .reconciliation-summary-card {
+                border: none;
+                border-radius: 12px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+                transition: transform 0.2s ease, box-shadow 0.2s ease;
+            }
+            .reconciliation-summary-card:hover {
+                transform: translateY(-3px);
+                box-shadow: 0 6px 24px rgba(0,0,0,0.08);
+            }
+            .reconciliation-summary-card .card-body {
+                padding: 1.25rem 1.5rem;
+            }
+            .reconciliation-summary-card .summary-label {
+                font-size: 0.85rem;
+                color: #6c757d;
+                margin-bottom: 0.25rem;
+            }
+            .reconciliation-summary-card .summary-value {
+                font-size: 1.75rem;
+                font-weight: 700;
+                line-height: 1.2;
+            }
+            .reconciliation-summary-card.border-primary .summary-value {
+                color: #0d6efd;
+            }
+            .reconciliation-summary-card.border-success .summary-value {
+                color: #198754;
+            }
+            .reconciliation-summary-card.border-warning .summary-value {
+                color: #ffc107;
+            }
+            .reconciliation-summary-card.border-info .summary-value {
+                color: #0dcaf0;
+            }
+            .reconciliation-table-card {
+                border: none;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+            }
+            .reconciliation-table-card .card-header {
+                background-color: #f8f9fa;
+                border-bottom: 1px solid #e9ecef;
+                padding: 1rem 1.5rem;
+                font-weight: 600;
+            }
+            .reconciliation-table-card .table {
+                margin-bottom: 0;
+            }
+            .reconciliation-table-card .table thead th {
+                border-top: none;
+                border-bottom-width: 2px;
+                font-weight: 600;
+                color: #495057;
+                background-color: #f8f9fa;
+                vertical-align: middle;
+                padding: 0.75rem 1rem;
+            }
+            .reconciliation-table-card .table tbody tr {
+                transition: background-color 0.15s ease;
+            }
+            .reconciliation-table-card .table tbody tr:hover {
+                background-color: rgba(0,123,255,0.05);
+            }
+            .reconciliation-table-card .table tbody td {
+                padding: 0.75rem 1rem;
+                vertical-align: middle;
+            }
+            .reconciliation-quick-filter .btn {
+                border-radius: 20px;
+                padding: 0.375rem 1rem;
+                font-size: 0.875rem;
+            }
+            @media (max-width: 767.98px) {
+                .reconciliation-summary-card .summary-value {
+                    font-size: 1.5rem;
+                }
+                .reconciliation-table-card .table-responsive {
+                    border-radius: 0;
+                }
+            }
+        </style>';
+
+        return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>月度对账</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css">' . $printStyles . $mobileStyles . $enhancedStyles . '</head><body>'
             . '<div class="container mt-4">'
+            // 页面标题区域
             . '<div class="report-page-head">'
             . '<div class="d-flex justify-content-between align-items-center flex-wrap gap-2"><h3 class="mb-0">月度对账</h3><div class="d-flex gap-2 align-items-center no-print reconciliation-toolbar"><span class="badge text-bg-light border">摘要编号：<span class="summary-ref-inline">' . htmlspecialchars($summaryRef) . '</span></span><button type="button" class="btn btn-sm btn-outline-secondary" id="copySummaryRefBtn" aria-label="复制摘要编号" title="复制摘要编号（Alt+Shift+C）">复制</button><span class="small text-muted copy-shortcut-hint">快捷键 Alt+Shift+C</span><span id="copySummaryRefHint" class="small copy-hint text-muted" role="status" aria-live="polite" aria-atomic="true"></span><button type="button" class="btn btn-outline-dark" onclick="window.print()">打印</button><a href="/payments/reconciliation/export?' . htmlspecialchars($queryString, ENT_QUOTES) . '" class="btn btn-outline-success">导出CSV</a><a href="/payments" class="btn btn-outline-secondary">返回账单列表</a><a href="/dashboard" class="btn btn-outline-secondary">返回仪表板</a></div></div>'
             . '<p class="subtitle">按账期查看应收、实收与未收差额，支持趋势分析、排序钻取与打印导出。</p>'
             . '</div>'
             . $printHeader
-            . '<div class="card report-filter-panel mb-3 no-print"><div class="card-body">'
-            . '<form class="row g-2 report-filter-form" method="GET" action="/payments/reconciliation">'
+            // 筛选面板
+            . '<div class="card report-filter-panel mb-4 no-print">'
+            . '<div class="card-header bg-light d-flex justify-content-between align-items-center"><h5 class="mb-0"><i class="bi bi-funnel me-2"></i>筛选条件</h5><small class="text-muted">设置筛选范围，点击“筛选”应用</small></div>'
+            . '<div class="card-body">'
+            . '<form class="row g-3 report-filter-form" method="GET" action="/payments/reconciliation">'
             . '<input type="hidden" name="bom" value="' . htmlspecialchars($bom) . '">'
             . '<div class="col-md-3"><label class="form-label">关键词</label><input class="form-control" type="search" name="keyword" placeholder="租客/房号/房产名" value="' . htmlspecialchars($keyword) . '"></div>'
             . '<div class="col-md-2"><label class="form-label">起始账期</label><input class="form-control" type="month" name="period_from" value="' . htmlspecialchars($periodFrom) . '"></div>'
@@ -2805,31 +3068,60 @@ class PaymentController
             . '<div class="col-md-1"><label class="form-label">方向</label><select class="form-select" name="sort_dir"><option value="desc"' . ($sortDir === 'desc' ? ' selected' : '') . '>降序</option><option value="asc"' . ($sortDir === 'asc' ? ' selected' : '') . '>升序</option></select></div>'
             . '<div class="col-md-3 d-flex align-items-center"><div class="form-check"><input class="form-check-input" type="checkbox" id="unpaidOnly" name="unpaid_only" value="1"' . ($unpaidOnly ? ' checked' : '') . '><label class="form-check-label" for="unpaidOnly">仅看有未收差额</label></div></div>'
             . '<div class="col-md-3 d-flex align-items-center"><div class="form-check"><input class="form-check-input" type="checkbox" id="liteModeReconciliation" name="lite" value="1"' . ($liteMode ? ' checked' : '') . '><label class="form-check-label" for="liteModeReconciliation">弱网优先模式</label></div></div>'
-            . '<div class="col-md-3 d-flex gap-2"><button class="btn btn-outline-primary flex-fill" type="submit">筛选</button><a class="btn btn-outline-secondary flex-fill" href="/payments/reconciliation">重置</a></div>'
-            . '</form></div></div>'
-            . '<div class="small text-muted mb-2 no-print">排序说明：同值时按账期降序兜底。</div>'
-            . '<div class="mb-3 d-flex flex-wrap gap-2 no-print">'
-            . '<a class="btn btn-sm ' . ($quick3mActive ? 'btn-primary' : 'btn-outline-primary') . '" href="' . htmlspecialchars($quick3m, ENT_QUOTES) . '">近3个月</a>'
-            . '<a class="btn btn-sm ' . ($quick6mActive ? 'btn-primary' : 'btn-outline-primary') . '" href="' . htmlspecialchars($quick6m, ENT_QUOTES) . '">近6个月</a>'
-            . '<a class="btn btn-sm ' . ($quick12mActive ? 'btn-primary' : 'btn-outline-primary') . '" href="' . htmlspecialchars($quick12m, ENT_QUOTES) . '">近12个月</a>'
-            . '<a class="btn btn-sm ' . ($quickYearActive ? 'btn-primary' : 'btn-outline-primary') . '" href="' . htmlspecialchars($quickYear, ENT_QUOTES) . '">本年</a>'
+            . '<div class="col-md-3 d-flex gap-2"><button class="btn btn-outline-primary flex-fill" type="submit"><i class="bi bi-funnel me-1"></i>筛选</button><a class="btn btn-outline-secondary flex-fill" href="/payments/reconciliation"><i class="bi bi-arrow-clockwise me-1"></i>重置</a></div>'
+            . '</form>'
             . '</div>'
-            . '<div class="row g-2 mb-3">'
-            . '<div class="col-md-3"><div class="card"><div class="card-body"><div class="text-muted">账单总数</div><div class="fs-5 fw-semibold">' . $sumBills . '</div></div></div></div>'
-            . '<div class="col-md-3"><div class="card"><div class="card-body"><div class="text-muted">应收总额</div><div class="fs-5 fw-semibold">¥' . number_format($sumReceivable, 2) . '</div></div></div></div>'
-            . '<div class="col-md-3"><div class="card"><div class="card-body"><div class="text-muted">实收总额</div><div class="fs-5 fw-semibold text-success">¥' . number_format($sumReceived, 2) . '</div></div></div></div>'
-            . '<div class="col-md-3"><div class="card"><div class="card-body"><div class="text-muted">收款率</div><div class="fs-5 fw-semibold">' . number_format($totalPaidRate, 2) . '%</div></div></div></div>'
             . '</div>'
-            . '<div class="card mb-3"><div class="card-body table-responsive"><div class="d-flex justify-content-between align-items-center mb-2"><h5 class="mb-0">表计维度汇总</h5><small class="text-muted">按表计编号聚合用量与费用</small></div><table class="table table-striped mobile-table"><thead><tr><th>表计类型</th><th>表计编号</th><th>表计名称</th><th class="text-end">涉及账单</th><th class="text-end">累计用量</th><th class="text-end">累计费用</th></tr></thead><tbody>' . $meterSummaryTbody . '</tbody></table></div></div>'
+            // 快捷筛选按钮
+            . '<div class="mb-4 no-print">'
+            . '<div class="d-flex justify-content-between align-items-center mb-2"><h5 class="mb-0">快捷筛选</h5><small class="text-muted">快速查看近期数据</small></div>'
+            . '<div class="d-flex flex-wrap gap-2 reconciliation-quick-filter">'
+            . '<a class="btn ' . ($quick3mActive ? 'btn-primary' : 'btn-outline-primary') . '" href="' . htmlspecialchars($quick3m, ENT_QUOTES) . '">近3个月</a>'
+            . '<a class="btn ' . ($quick6mActive ? 'btn-primary' : 'btn-outline-primary') . '" href="' . htmlspecialchars($quick6m, ENT_QUOTES) . '">近6个月</a>'
+            . '<a class="btn ' . ($quick12mActive ? 'btn-primary' : 'btn-outline-primary') . '" href="' . htmlspecialchars($quick12m, ENT_QUOTES) . '">近12个月</a>'
+            . '<a class="btn ' . ($quickYearActive ? 'btn-primary' : 'btn-outline-primary') . '" href="' . htmlspecialchars($quickYear, ENT_QUOTES) . '">本年</a>'
+            . '</div>'
+            . '</div>'
+            // 核心指标卡片
+            . '<div class="row g-3 mb-4">'
+            . '<div class="col-md-3"><div class="card reconciliation-summary-card border-primary"><div class="card-body"><div class="summary-label">账单总数</div><div class="summary-value">' . $sumBills . '</div></div></div></div>'
+            . '<div class="col-md-3"><div class="card reconciliation-summary-card border-primary"><div class="card-body"><div class="summary-label">应收总额</div><div class="summary-value">¥' . number_format($sumReceivable, 2) . '</div></div></div></div>'
+            . '<div class="col-md-3"><div class="card reconciliation-summary-card border-success"><div class="card-body"><div class="summary-label">实收总额</div><div class="summary-value">¥' . number_format($sumReceived, 2) . '</div></div></div></div>'
+            . '<div class="col-md-3"><div class="card reconciliation-summary-card border-info"><div class="card-body"><div class="summary-label">收款率</div><div class="summary-value">' . number_format($totalPaidRate, 2) . '%</div></div></div></div>'
+            . '</div>'
+            // 表计维度汇总
+            . '<div class="card reconciliation-table-card mb-4">'
+            . '<div class="card-header d-flex justify-content-between align-items-center"><h5 class="mb-0"><i class="bi bi-speedometer2 me-2"></i>表计维度汇总</h5><small class="text-muted">按表计编号聚合用量与费用</small></div>'
+            . '<div class="card-body p-0">'
+            . '<div class="table-responsive">'
+            . '<table class="table table-hover mb-0 mobile-table">'
+            . '<thead class="table-light"><tr><th>表计类型</th><th>表计编号</th><th>表计名称</th><th class="text-end">涉及账单</th><th class="text-end">累计用量</th><th class="text-end">累计费用</th></tr></thead>'
+            . '<tbody>' . $meterSummaryTbody . '</tbody>'
+            . '</table>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            // 趋势图
             . $trendCardHtml
-            . '<div class="card"><div class="card-body table-responsive"><table class="table table-striped mobile-table"><thead><tr>'
+            // 主对账表格
+            . '<div class="card reconciliation-table-card">'
+            . '<div class="card-header d-flex justify-content-between align-items-center"><h5 class="mb-0"><i class="bi bi-calendar-check me-2"></i>月度对账明细</h5><small class="text-muted">点击表头可排序，点击未收金额可钻取</small></div>'
+            . '<div class="card-body p-0">'
+            . '<div class="table-responsive">'
+            . '<table class="table table-hover mb-0 mobile-table">'
+            . '<thead class="table-light"><tr>'
             . '<th><a class="link-dark text-decoration-none" href="' . htmlspecialchars($sortLinkPeriod, ENT_QUOTES) . '">账期' . $periodIndicator . '</a></th>'
             . '<th>账单数</th>'
             . '<th>应收总额</th>'
             . '<th>实收总额</th>'
             . '<th><a class="link-dark text-decoration-none" href="' . htmlspecialchars($sortLinkUnpaid, ENT_QUOTES) . '">未收差额' . $unpaidIndicator . '</a></th>'
             . '<th><a class="link-dark text-decoration-none" href="' . htmlspecialchars($sortLinkPaidRate, ENT_QUOTES) . '">收款完成度' . $paidRateIndicator . '</a></th>'
-            . '</tr></thead><tbody>' . $tableRows . '</tbody></table></div></div>'
+            . '</tr></thead>'
+            . '<tbody>' . $tableRows . '</tbody>'
+            . '</table>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
             . $printFooter
             . $copyScript
             . '</div></body></html>';
@@ -3760,9 +4052,11 @@ class PaymentController
         return $periodFrom === $year . '-01' && $periodTo === $year . '-12';
     }
 
-    private function billCreateTemplate(array $contracts, ?array $selectedContract, string $period, array $meterRows): string
+    private function billCreateTemplate(array $contracts, ?array $selectedContract, string $period, array $meterRows, string $billType = 'monthly'): string
     {
         $alerts = $this->renderFlashAlerts();
+        $pageTitle = $billType === 'checkout' ? '新建退租结算账单' : '新建月度账单';
+        $pageHeading = $billType === 'checkout' ? '新建退租结算账单' : '新建月度账单';
         $contractOptions = '';
         foreach ($contracts as $contract) {
             $selected = $selectedContract !== null && (int) $selectedContract['id'] === (int) $contract['id'] ? ' selected' : '';
@@ -3792,10 +4086,10 @@ class PaymentController
                 . '<td><input class="form-control form-control-sm" type="text" name="meter_name[]" value="' . htmlspecialchars((string) ($row['meter_name'] ?? ''), ENT_QUOTES) . '" placeholder="可选名称"></td>'
                 . '<td><input class="form-control form-control-sm" type="number" step="0.01" min="0" name="previous_reading[]" value="' . number_format((float) ($row['previous_reading'] ?? 0), 2, '.', '') . '" required></td>'
                 . '<td><input class="form-control form-control-sm" type="number" step="0.01" min="0" name="current_reading[]" value="' . number_format((float) ($row['current_reading'] ?? 0), 2, '.', '') . '" required></td>'
-                . '<td><input class="form-control form-control-sm" type="number" step="0.0001" min="0" name="unit_price[]" value="' . number_format((float) ($row['unit_price'] ?? 0), 4, '.', '') . '" required></td>'
-                . '<td class="text-end text-nowrap usage-cell">0.00</td>'
-                . '<td class="text-end text-nowrap fee-cell">¥0.00</td>'
-                . '<td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger remove-row-btn">删除</button></td>'
+                . '<td><input class="form-control form-control-sm" type="number" step="0.01" min="0" name="unit_price[]" value="' . number_format((float) ($row['unit_price'] ?? 0), 2, '.', '') . '" required></td>'
+                . '<td class="text-end text-nowrap usage-cell fw-semibold">0.00</td>'
+                . '<td class="text-end text-nowrap fee-cell fw-bold text-primary">¥0.00</td>'
+                . '<td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger remove-row-btn"><i class="bi bi-trash"></i> 删除</button></td>'
                 . '</tr>';
         }
 
@@ -3806,10 +4100,10 @@ class PaymentController
                 . '<td><input class="form-control form-control-sm" type="text" name="meter_name[]" placeholder="可选名称"></td>'
                 . '<td><input class="form-control form-control-sm" type="number" step="0.01" min="0" name="previous_reading[]" value="0.00" required></td>'
                 . '<td><input class="form-control form-control-sm" type="number" step="0.01" min="0" name="current_reading[]" value="0.00" required></td>'
-                . '<td><input class="form-control form-control-sm" type="number" step="0.0001" min="0" name="unit_price[]" value="0.0000" required></td>'
-                . '<td class="text-end text-nowrap usage-cell">0.00</td>'
-                . '<td class="text-end text-nowrap fee-cell">¥0.00</td>'
-                . '<td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger remove-row-btn">删除</button></td>'
+                . '<td><input class="form-control form-control-sm" type="number" step="0.01" min="0" name="unit_price[]" value="0.00" required></td>'
+                . '<td class="text-end text-nowrap usage-cell fw-semibold">0.00</td>'
+                . '<td class="text-end text-nowrap fee-cell fw-bold text-primary">¥0.00</td>'
+                . '<td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger remove-row-btn"><i class="bi bi-trash"></i> 删除</button></td>'
                 . '</tr>';
         }
 
@@ -3818,31 +4112,144 @@ class PaymentController
             $contractSwitchScript = 'onchange="const p=document.querySelector(\'[name=period]\');const period=p?p.value:\'' . htmlspecialchars($period, ENT_QUOTES) . '\';window.location=\'/payments/create?contract_id=\'+this.value+\'&period=\'+encodeURIComponent(period);"';
         }
 
-        return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>新建月度账单</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css"></head><body>'
-            . '<div class="container mt-4"><div class="d-flex justify-content-between align-items-center mb-3"><h3>新建月度账单</h3><a href="/payments" class="btn btn-secondary">返回账单列表</a></div>'
+        $enhancedStyles = '<style>
+            .bill-create-card {
+                border: none;
+                border-radius: 16px;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.08);
+                overflow: hidden;
+            }
+            .bill-create-card .card-header {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border: none;
+                padding: 1.5rem;
+                font-weight: 600;
+            }
+            .bill-create-card .card-body {
+                padding: 2rem;
+            }
+            .meter-table {
+                border-collapse: separate;
+                border-spacing: 0;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+            }
+            .meter-table thead th {
+                background-color: #f8f9fa;
+                border-bottom: 2px solid #dee2e6;
+                font-weight: 600;
+                color: #495057;
+                padding: 0.875rem 1rem;
+                text-align: center;
+                vertical-align: middle;
+            }
+            .meter-table tbody tr {
+                transition: background-color 0.15s ease;
+            }
+            .meter-table tbody tr:hover {
+                background-color: rgba(102, 126, 234, 0.05);
+            }
+            .meter-table tbody td {
+                padding: 0.75rem 1rem;
+                vertical-align: middle;
+                border-top: 1px solid #e9ecef;
+            }
+            .usage-cell {
+                font-family: "SF Mono", Monaco, Consolas, monospace;
+                color: #0f766e;
+            }
+            .fee-cell {
+                font-family: "SF Mono", Monaco, Consolas, monospace;
+                color: #059669;
+            }
+            .summary-card {
+                border: none;
+                border-radius: 12px;
+                background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+                padding: 1.5rem;
+                margin-top: 1rem;
+            }
+            .summary-card .total-amount {
+                font-size: 2rem;
+                font-weight: 800;
+                color: #0d6efd;
+                line-height: 1;
+            }
+            .summary-card .label {
+                font-size: 0.9rem;
+                color: #6c757d;
+                margin-bottom: 0.25rem;
+            }
+            .btn-enhanced {
+                border-radius: 10px;
+                padding: 0.625rem 1.5rem;
+                font-weight: 600;
+                transition: all 0.2s ease;
+            }
+            .btn-enhanced:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+            }
+            @media (max-width: 767.98px) {
+                .bill-create-card .card-body {
+                    padding: 1.25rem;
+                }
+                .meter-table thead th {
+                    font-size: 0.85rem;
+                }
+                .meter-table tbody td {
+                    font-size: 0.85rem;
+                }
+            }
+        </style>';
+
+        return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>' . $pageTitle . '</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css"><link rel="stylesheet" href="/assets/css/bootstrap-icons.css">' . $enhancedStyles . '</head><body>'
+            . '<div class="container mt-4 mb-5">'
+            // 头部标题
+            . '<div class="d-flex justify-content-between align-items-center mb-4"><div><h1 class="h3 mb-1"><i class="bi bi-plus-circle me-2"></i>' . $pageHeading . '</h1><p class="text-muted">根据合同与表计读数，自动生成月度账单或退租结算账单</p></div><a href="/payments" class="btn btn-outline-secondary"><i class="bi bi-arrow-left me-1"></i>返回账单列表</a></div>'
             . $alerts
-            . '<div class="card"><div class="card-body">'
+            // 主卡片
+            . '<div class="card bill-create-card">'
+            . '<div class="card-header"><h2 class="h5 mb-0"><i class="bi bi-file-earmark-text me-2"></i>账单信息</h2></div>'
+            . '<div class="card-body">'
             . '<form method="POST" action="/payments">'
             . '<input type="hidden" name="_token" value="' . csrf_token() . '">'
-            . '<div class="row g-3">'
-            . '<div class="col-md-6"><label class="form-label">合同</label><select class="form-select" name="contract_id" ' . $contractSwitchScript . ' required>' . $contractOptions . '</select></div>'
-            . '<div class="col-md-3"><label class="form-label">账单周期</label><input class="form-control" type="month" name="period" value="' . htmlspecialchars($period) . '" required></div>'
-            . '<div class="col-md-3"><label class="form-label">固定月租金</label><input class="form-control" type="number" step="0.01" id="rentAmount" name="rent_amount" value="' . number_format($rentAmount, 2, '.', '') . '"></div>'
-            . '<div class="col-12"><hr class="my-1"></div>'
-            . '<div class="col-12">'
-            . '<div class="d-flex justify-content-between align-items-center mb-2"><label class="form-label mb-0">计量表明细（支持一套房多个表计，如水/电/气）</label><button type="button" class="btn btn-sm btn-outline-primary" id="addMeterRowBtn">新增表计</button></div>'
-            . '<div class="table-responsive"><table class="table table-sm table-bordered align-middle"><thead><tr><th>类型</th><th>表计编号</th><th>表计名称</th><th>上月读数</th><th>本月读数</th><th>单价</th><th class="text-end">用量</th><th class="text-end">费用</th><th class="text-center">操作</th></tr></thead><tbody id="meterRowsBody">' . $meterRowsHtml . '</tbody></table></div>'
+            . '<input type="hidden" name="bill_type" value="' . htmlspecialchars($billType) . '">'
+            . '<div class="row g-4">'
+            . '<div class="col-lg-6"><label class="form-label fw-semibold"><i class="bi bi-file-earmark-check me-1"></i>合同</label><select class="form-select form-select-lg" name="contract_id" ' . $contractSwitchScript . ' required>' . $contractOptions . '</select></div>'
+            . '<div class="col-lg-3"><label class="form-label fw-semibold"><i class="bi bi-calendar-month me-1"></i>账单周期</label><input class="form-control form-control-lg" type="month" name="period" value="' . htmlspecialchars($period) . '" required></div>'
+            . '<div class="col-lg-3"><label class="form-label fw-semibold"><i class="bi bi-currency-dollar me-1"></i>固定月租金</label><input class="form-control form-control-lg" type="number" step="0.01" min="0" id="rentAmount" name="rent_amount" value="' . number_format($rentAmount, 2, '.', '') . '" required></div>'
+            // 表计表格
+            . '<div class="col-12 mt-3">'
+            . '<div class="d-flex justify-content-between align-items-center mb-3"><h4 class="h5 mb-0"><i class="bi bi-speedometer2 me-2"></i>计量表明细</h4><button type="button" class="btn btn-primary btn-enhanced" id="addMeterRowBtn"><i class="bi bi-plus-circle me-1"></i>新增表计</button></div>'
+            . '<div class="table-responsive"><table class="table meter-table"><thead><tr><th>类型</th><th>表计编号</th><th>表计名称</th><th class="text-center">上月读数</th><th class="text-center">本月读数</th><th class="text-center">单价</th><th class="text-end">用量</th><th class="text-end">费用</th><th class="text-center">操作</th></tr></thead><tbody id="meterRowsBody">' . $meterRowsHtml . '</tbody></table></div>'
+            . '<small class="text-muted mt-2 d-block"><i class="bi bi-info-circle me-1"></i>系统将自动计算：用量 = 本月读数 - 上月读数；费用 = 用量 × 单价；可添加多个表计（水/电/气等）。</small>'
             . '</div>'
-            . '<div class="col-12"><div id="formulaPreview" class="alert alert-info mb-0">系统将逐行独立计算：用量 = 本月读数 - 上月读数；费用 = 用量 × 单价；应收总额 = 月租金 + 全部计量费用。</div></div>'
-            . '<div class="col-12 d-grid"><button class="btn btn-primary" type="submit"' . ($selectedContract === null ? ' disabled' : '') . '>计算并生成账单</button></div>'
-            . '</div></form></div></div></div>'
+            // 实时预览
+            . '<div class="col-12">'
+            . '<div class="summary-card">'
+            . '<h5 class="h6 mb-3"><i class="bi bi-calculator me-2"></i>费用预览</h5>'
+            . '<div id="formulaPreview"><div class="row"><div class="col-md-4 mb-3"><div class="label">月租金</div><div class="total-amount" id="previewRent">¥' . number_format($rentAmount, 2) . '</div></div><div class="col-md-4 mb-3"><div class="label">计量费合计</div><div class="total-amount" id="previewMeter">¥0.00</div></div><div class="col-md-4 mb-3"><div class="label">应收总额</div><div class="total-amount" id="previewTotal">¥' . number_format($rentAmount, 2) . '</div></div></div><div class="alert alert-light mt-3" id="formulaDetail">系统将逐行计算用量与费用，总额 = 月租金 + 计量费合计。</div></div>'
+            . '</div>'
+            . '</div>'
+            // 提交按钮
+            . '<div class="col-12 d-grid mt-2">'
+            . '<button class="btn btn-success btn-enhanced btn-lg" type="submit"' . ($selectedContract === null ? ' disabled' : '') . '><i class="bi bi-check-circle me-2"></i>计算并生成账单</button>'
+            . '</div>'
+            . '</div>'
+            . '</form>'
+            . '</div>'
+            . '</div>'
+            // 脚本
             . '<script>'
             . 'const byId=(id)=>document.getElementById(id);'
             . 'const toNum=(value)=>{const v=parseFloat(String(value??"0"));return Number.isFinite(v)?v:0;};'
             . 'const money=(v)=>"¥"+v.toFixed(2);'
             . 'const body=byId("meterRowsBody");'
-            . 'const createRow=()=>{const tr=document.createElement("tr");tr.setAttribute("data-meter-row","");tr.innerHTML="<td><input type=\"hidden\" name=\"meter_id[]\" value=\"0\"><select class=\"form-select form-select-sm\" name=\"meter_type[]\" required>' . str_replace('"', '\\"', $defaultMeterTypeOptions) . '</select></td><td><input class=\"form-control form-control-sm\" type=\"text\" name=\"meter_code[]\" placeholder=\"如 WATER-2\" required></td><td><input class=\"form-control form-control-sm\" type=\"text\" name=\"meter_name[]\" placeholder=\"可选名称\"></td><td><input class=\"form-control form-control-sm\" type=\"number\" step=\"0.01\" min=\"0\" name=\"previous_reading[]\" value=\"0.00\" required></td><td><input class=\"form-control form-control-sm\" type=\"number\" step=\"0.01\" min=\"0\" name=\"current_reading[]\" value=\"0.00\" required></td><td><input class=\"form-control form-control-sm\" type=\"number\" step=\"0.0001\" min=\"0\" name=\"unit_price[]\" value=\"0.0000\" required></td><td class=\"text-end text-nowrap usage-cell\">0.00</td><td class=\"text-end text-nowrap fee-cell\">¥0.00</td><td class=\"text-center\"><button type=\"button\" class=\"btn btn-sm btn-outline-danger remove-row-btn\">删除</button></td>";return tr;};'
-            . 'const recalc=()=>{const rent=toNum(byId("rentAmount")?.value);let meterFee=0,warns=[];const rows=body.querySelectorAll("tr[data-meter-row]");rows.forEach((row)=>{const prev=toNum(row.querySelector("[name=\"previous_reading[]\"]")?.value);const cur=toNum(row.querySelector("[name=\"current_reading[]\"]")?.value);const price=toNum(row.querySelector("[name=\"unit_price[]\"]")?.value);const usage=cur-prev;const safeUsage=Math.max(0,usage);const fee=safeUsage*price;const usageCell=row.querySelector(".usage-cell");const feeCell=row.querySelector(".fee-cell");if(usageCell){usageCell.textContent=safeUsage.toFixed(2);}if(feeCell){feeCell.textContent=money(fee);}if(usage<0){warns.push("存在本月读数小于上月读数的表计");}meterFee+=fee;});const total=rent+meterFee;const warnHtml=warns.length>0?"<div class=\"text-danger fw-bold mb-2\">"+warns[0]+"</div>":"";byId("formulaPreview").innerHTML=warnHtml+"<div><strong>预估计量费合计</strong>："+money(meterFee)+"</div><div><strong>预估总额</strong>："+money(rent)+" + "+money(meterFee)+" = "+money(total)+"</div>";};'
+            . 'const createRow=()=>{const tr=document.createElement("tr");tr.setAttribute("data-meter-row","");tr.innerHTML=\'<td><input type="hidden" name="meter_id[]" value="0"><select class="form-select form-select-sm" name="meter_type[]" required>' . str_replace("'", "\\'", $defaultMeterTypeOptions) . '</select></td><td><input class="form-control form-control-sm" type="text" name="meter_code[]" placeholder="如 WATER-2" required></td><td><input class="form-control form-control-sm" type="text" name="meter_name[]" placeholder="可选名称"></td><td><input class="form-control form-control-sm" type="number" step="0.01" min="0" name="previous_reading[]" value="0.00" required></td><td><input class="form-control form-control-sm" type="number" step="0.01" min="0" name="current_reading[]" value="0.00" required></td><td><input class="form-control form-control-sm" type="number" step="0.01" min="0" name="unit_price[]" value="0.00" required></td><td class="text-end text-nowrap usage-cell fw-semibold">0.00</td><td class="text-end text-nowrap fee-cell fw-bold text-primary">¥0.00</td><td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger remove-row-btn"><i class="bi bi-trash"></i> 删除</button></td>\';return tr;};'
+            . 'const recalc=()=>{const rent=toNum(byId("rentAmount")?.value);let meterFee=0,warns=[];const rows=body.querySelectorAll("tr[data-meter-row]");rows.forEach((row)=>{const prev=toNum(row.querySelector("[name=\'previous_reading[]\']")?.value);const cur=toNum(row.querySelector("[name=\'current_reading[]\']")?.value);const price=toNum(row.querySelector("[name=\'unit_price[]\']")?.value);const usage=cur-prev;const safeUsage=Math.max(0,usage);const fee=safeUsage*price;const usageCell=row.querySelector(".usage-cell");const feeCell=row.querySelector(".fee-cell");if(usageCell){usageCell.textContent=safeUsage.toFixed(2);}if(feeCell){feeCell.textContent=money(fee);}if(usage<0){warns.push("存在本月读数小于上月读数的表计");}meterFee+=fee;});const total=rent+meterFee;byId("previewRent").textContent=money(rent);byId("previewMeter").textContent=money(meterFee);byId("previewTotal").textContent=money(total);const warnHtml=warns.length>0?"<div class=\"alert alert-warning py-2 mb-2\"><i class=\"bi bi-exclamation-triangle me-2\"></i>"+warns[0]+"</div>":"";byId("formulaDetail").innerHTML=warnHtml+"<div class=\"mt-2\"><strong>计算公式</strong>：月租金 "+money(rent)+" + 计量费合计 "+money(meterFee)+" = 应收总额 "+money(total)+"</div>";};'
             . 'byId("addMeterRowBtn")?.addEventListener("click",()=>{body.appendChild(createRow());recalc();});'
             . 'body.addEventListener("input",(e)=>{if(e.target instanceof HTMLElement){recalc();}});'
             . 'body.addEventListener("click",(e)=>{const target=e.target;if(!(target instanceof HTMLElement)){return;}if(target.classList.contains("remove-row-btn")){const rows=body.querySelectorAll("tr[data-meter-row]");if(rows.length<=1){return;}const tr=target.closest("tr[data-meter-row]");if(tr){tr.remove();recalc();}}});'
@@ -3901,13 +4308,12 @@ class PaymentController
                 $rowsHtml .= '<tr>'
                     . '<td>' . htmlspecialchars($this->meterTypeLabel($type), ENT_QUOTES) . '</td>'
                     . '<td>' . htmlspecialchars((string) ($row['meter_code_snapshot'] ?? ''), ENT_QUOTES) . '</td>'
-                    . '<td>' . htmlspecialchars((string) ($row['meter_name_snapshot'] ?? '-'), ENT_QUOTES) . '</td>'
                     . '<td class="text-end">' . number_format((float) ($row['previous_reading'] ?? 0), 2) . '</td>'
                     . '<td class="text-end">' . number_format((float) ($row['current_reading'] ?? 0), 2) . '</td>'
                     . '<td class="text-end">' . number_format($usageAmount, 2) . '</td>'
-                    . '<td class="text-end">' . number_format($unitPrice, 4) . '</td>'
+                    . '<td class="text-end">' . number_format($unitPrice, 2) . '</td>'
                     . '<td class="text-end">¥' . number_format($lineAmount, 2) . '</td>'
-                    . '<td class="text-end">' . number_format($usageAmount, 2) . ' × ¥' . number_format($unitPrice, 4) . ' = ¥' . number_format($lineAmount, 2) . '</td>'
+                    . '<td class="text-end">' . number_format($usageAmount, 2) . ' × ¥' . number_format($unitPrice, 2) . ' = ¥' . number_format($lineAmount, 2) . '</td>'
                     . '</tr>';
             }
 
@@ -3916,26 +4322,35 @@ class PaymentController
                 $rentAmount = (float) (($billDetails['formula']['rent_amount'] ?? $rentAmount));
             }
 
-            $payableRows = '<li><strong>固定月租金：</strong>¥' . number_format($rentAmount, 2) . '</li>';
+            $payableRows = '<li class="list-group-item d-flex justify-content-between align-items-center"><span>固定月租金</span><span class="fw-semibold">¥' . number_format($rentAmount, 2) . '</span></li>';
             foreach ($typeFeeMap as $meterType => $fee) {
                 $label = $this->meterTypeLabel((string) $meterType);
                 $usage = (float) ($typeUsageMap[$meterType] ?? 0);
-                $payableRows .= '<li><strong>' . htmlspecialchars($label, ENT_QUOTES) . '费用：</strong>¥' . number_format($fee, 2)
-                    . '（累计用量 ' . number_format($usage, 2) . '）</li>';
+                $payableRows .= '<li class="list-group-item d-flex justify-content-between align-items-center"><span>' . htmlspecialchars($label, ENT_QUOTES) . '费用（累计用量 ' . number_format($usage, 2) . '）</span><span class="fw-semibold">¥' . number_format($fee, 2) . '</span></li>';
             }
-            $payableRows .= '<li><strong>滞纳金：</strong>¥' . number_format((float) $payment['late_fee'], 2) . '</li>';
-            $payableRows .= '<li id="discount-li"><strong>折扣抵扣：</strong>-¥<span id="discount-amount">' . number_format((float) $payment['discount'], 2) . '</span></li>';
+            $payableRows .= '<li class="list-group-item d-flex justify-content-between align-items-center"><span>滞纳金</span><span class="fw-semibold">¥' . number_format((float) $payment['late_fee'], 2) . '</span></li>';
+            $payableRows .= '<li class="list-group-item d-flex justify-content-between align-items-center text-danger" id="discount-li"><span>折扣抵扣</span><span class="fw-bold">-¥<span id="discount-amount">' . number_format((float) $payment['discount'], 2) . '</span></span></li>';
 
-            $formulaBlock = '<hr>'
-                . '<h5 class="mb-3">本期账单明细（多表计）</h5>'
-                . '<p><strong>固定月租金：</strong>¥' . number_format($rentAmount, 2) . '</p>'
-                . '<div class="table-responsive"><table class="table table-sm table-bordered align-middle"><thead><tr><th>类型</th><th>表计编号</th><th>表计名称</th><th class="text-end">上月读数</th><th class="text-end">本月读数</th><th class="text-end">用量</th><th class="text-end">单价</th><th class="text-end">费用</th><th class="text-end">计算公式</th></tr></thead><tbody>' . $rowsHtml . '</tbody></table></div>'
-                . '<p><strong>水费合计：</strong>¥' . number_format($waterFee, 2) . '</p>'
-                . '<p><strong>电费合计：</strong>¥' . number_format($electricFee, 2) . '</p>'
-                . '<hr>'
-                . '<h6 class="mb-2">应付构成</h6>'
-                . '<ul class="mb-2" id="payable-constituents" data-rent="' . number_format($rentAmount, 2) . '" data-meter-total="' . number_format($meterFeeTotal, 2) . '" data-late-fee="' . number_format((float) $payment['late_fee'], 2) . '">' . $payableRows . '</ul>'
-                . '<p class="mb-0"><strong>应收计算公式：</strong><span id="formula-rent">¥' . number_format($rentAmount, 2) . '</span> + <span id="formula-meter">¥' . number_format($meterFeeTotal, 2) . '</span> + <span id="formula-late">¥' . number_format((float) $payment['late_fee'], 2) . '</span> - <span id="formula-discount">¥' . number_format((float) $payment['discount'], 2) . '</span> = <strong id="formula-total">¥' . number_format($totalDue, 2) . '</strong></p>';
+            $formulaBlock = '<div class="card border-0 shadow-sm my-4">'
+                . '<div class="card-header bg-light"><h5 class="mb-0">本期账单明细（多表计）</h5></div>'
+                . '<div class="card-body">'
+                . '<div class="row mb-3">'
+                . '<div class="col-md-6"><div class="alert alert-light"><strong>固定月租金：</strong> <span class="float-end">¥' . number_format($rentAmount, 2) . '</span></div></div>'
+                . '<div class="col-md-3"><div class="alert alert-info"><strong>水费合计：</strong> <span class="float-end">¥' . number_format($waterFee, 2) . '</span></div></div>'
+                . '<div class="col-md-3"><div class="alert alert-info"><strong>电费合计：</strong> <span class="float-end">¥' . number_format($electricFee, 2) . '</span></div></div>'
+                . '</div>'
+                . '<div class="table-responsive"><table class="table table-hover table-sm align-middle"><thead class="table-light"><tr><th>类型</th><th>表计编号</th><th class="text-end">上月读数</th><th class="text-end">本月读数</th><th class="text-end">用量</th><th class="text-end">单价</th><th class="text-end">费用</th><th class="text-end">计算公式</th></tr></thead><tbody>' . $rowsHtml . '</tbody></table></div>'
+                . '<h6 class="mt-4 mb-2">应付构成</h6>'
+                . '<ul class="list-group mb-3" id="payable-constituents" data-rent="' . number_format($rentAmount, 2) . '" data-meter-total="' . number_format($meterFeeTotal, 2) . '" data-late-fee="' . number_format((float) $payment['late_fee'], 2) . '">' . $payableRows . '</ul>'
+                . '<div class="alert alert-success"><strong>应收计算公式：</strong><br>'
+                . '<span id="formula-rent">¥' . number_format($rentAmount, 2) . '</span> + '
+                . '<span id="formula-meter">¥' . number_format($meterFeeTotal, 2) . '</span> + '
+                . '<span id="formula-late">¥' . number_format((float) $payment['late_fee'], 2) . '</span> - '
+                . '<span id="formula-discount">¥' . number_format((float) $payment['discount'], 2) . '</span> = '
+                . '<strong id="formula-total">¥' . number_format($totalDue, 2) . '</strong>'
+                . '</div>'
+                . '</div>'
+                . '</div>';
         } elseif ($billDetails !== null && isset($billDetails['formula']) && is_array($billDetails['formula'])) {
             $f = $billDetails['formula'];
             $waterPrevious = (float) ($f['water_previous'] ?? 0);
@@ -3951,63 +4366,142 @@ class PaymentController
             $electricFee = (float) ($f['electric_fee'] ?? 0);
             $rentAmount = (float) ($f['rent_amount'] ?? $payment['amount_due'] ?? 0);
 
-            $formulaBlock = '<hr>'
-                . '<h5 class="mb-3">本期账单明细</h5>'
-                . '<p><strong>固定月租金：</strong>¥' . number_format($rentAmount, 2) . '</p>'
-                . '<p><strong>总用水量：</strong>' . number_format($waterCurrent, 2) . '（上月：' . number_format($waterPrevious, 2) . '，本月：' . number_format($waterCurrent, 2) . '）</p>'
+            $formulaBlock = '<div class="card border-0 shadow-sm my-4">'
+                . '<div class="card-header bg-light"><h5 class="mb-0">本期账单明细</h5></div>'
+                . '<div class="card-body">'
+                . '<div class="row mb-3">'
+                . '<div class="col-md-4"><div class="alert alert-light"><strong>固定月租金：</strong> <span class="float-end">¥' . number_format($rentAmount, 2) . '</span></div></div>'
+                . '<div class="col-md-4"><div class="alert alert-info"><strong>水费：</strong> <span class="float-end">¥' . number_format($waterFee, 2) . '</span></div></div>'
+                . '<div class="col-md-4"><div class="alert alert-info"><strong>电费：</strong> <span class="float-end">¥' . number_format($electricFee, 2) . '</span></div></div>'
+                . '</div>'
+                . '<div class="row mb-3">'
+                . '<div class="col-md-6">'
+                . '<div class="card card-body"><h6>水费明细</h6><p><strong>总用水量：</strong>' . number_format($waterCurrent, 2) . '（上月：' . number_format($waterPrevious, 2) . '，本月：' . number_format($waterCurrent, 2) . '）</p>'
                 . '<p><strong>当月水量：</strong>' . number_format($waterUsage, 2) . ' × 单价 ¥' . number_format($waterUnitPrice, 2) . ' = 水费 ¥' . number_format($waterFee, 2) . '</p>'
-                . '<p><strong>总用电量：</strong>' . number_format($electricCurrent, 2) . '（上月：' . number_format($electricPrevious, 2) . '，本月：' . number_format($electricCurrent, 2) . '）</p>'
+                . '</div>'
+                . '</div>'
+                . '<div class="col-md-6">'
+                . '<div class="card card-body"><h6>电费明细</h6><p><strong>总用电量：</strong>' . number_format($electricCurrent, 2) . '（上月：' . number_format($electricPrevious, 2) . '，本月：' . number_format($electricCurrent, 2) . '）</p>'
                 . '<p><strong>当月电量：</strong>' . number_format($electricUsage, 2) . ' × 单价 ¥' . number_format($electricUnitPrice, 2) . ' = 电费 ¥' . number_format($electricFee, 2) . '</p>'
-                . '<hr>'
+                . '</div>'
+                . '</div>'
+                . '</div>'
                 . '<h6 class="mb-2">应付构成</h6>'
-                . '<ul class="mb-2" id="payable-constituents" data-rent="' . number_format($rentAmount, 2) . '" data-water="' . number_format($waterFee, 2) . '" data-electric="' . number_format($electricFee, 2) . '" data-late-fee="' . number_format((float) $payment['late_fee'], 2) . '"><li><strong>固定月租金：</strong>¥' . number_format($rentAmount, 2) . '</li><li><strong>水费：</strong>¥' . number_format($waterFee, 2) . '</li><li><strong>电费：</strong>¥' . number_format($electricFee, 2) . '</li><li><strong>滞纳金：</strong>¥' . number_format((float) $payment['late_fee'], 2) . '</li><li id="discount-li"><strong>折扣抵扣：</strong>-¥<span id="discount-amount">' . number_format((float) $payment['discount'], 2) . '</span></li></ul>'
-                . '<p class="mb-0"><strong>应收计算公式：</strong><span id="formula-rent">¥' . number_format($rentAmount, 2) . '</span> + <span id="formula-water">¥' . number_format($waterFee, 2) . '</span> + <span id="formula-electric">¥' . number_format($electricFee, 2) . '</span> + <span id="formula-late">¥' . number_format((float) $payment['late_fee'], 2) . '</span> - <span id="formula-discount">¥' . number_format((float) $payment['discount'], 2) . '</span> = <strong id="formula-total">¥' . number_format($totalDue, 2) . '</strong></p>';
+                . '<ul class="list-group mb-3" id="payable-constituents" data-rent="' . number_format($rentAmount, 2) . '" data-water="' . number_format($waterFee, 2) . '" data-electric="' . number_format($electricFee, 2) . '" data-late-fee="' . number_format((float) $payment['late_fee'], 2) . '">'
+                . '<li class="list-group-item d-flex justify-content-between align-items-center"><span>固定月租金</span><span class="fw-semibold">¥' . number_format($rentAmount, 2) . '</span></li>'
+                . '<li class="list-group-item d-flex justify-content-between align-items-center"><span>水费</span><span class="fw-semibold">¥' . number_format($waterFee, 2) . '</span></li>'
+                . '<li class="list-group-item d-flex justify-content-between align-items-center"><span>电费</span><span class="fw-semibold">¥' . number_format($electricFee, 2) . '</span></li>'
+                . '<li class="list-group-item d-flex justify-content-between align-items-center"><span>滞纳金</span><span class="fw-semibold">¥' . number_format((float) $payment['late_fee'], 2) . '</span></li>'
+                . '<li class="list-group-item d-flex justify-content-between align-items-center text-danger" id="discount-li"><span>折扣抵扣</span><span class="fw-bold">-¥<span id="discount-amount">' . number_format((float) $payment['discount'], 2) . '</span></span></li>'
+                . '</ul>'
+                . '<div class="alert alert-success"><strong>应收计算公式：</strong><br>'
+                . '<span id="formula-rent">¥' . number_format($rentAmount, 2) . '</span> + '
+                . '<span id="formula-water">¥' . number_format($waterFee, 2) . '</span> + '
+                . '<span id="formula-electric">¥' . number_format($electricFee, 2) . '</span> + '
+                . '<span id="formula-late">¥' . number_format((float) $payment['late_fee'], 2) . '</span> - '
+                . '<span id="formula-discount">¥' . number_format((float) $payment['discount'], 2) . '</span> = '
+                . '<strong id="formula-total">¥' . number_format($totalDue, 2) . '</strong>'
+                . '</div>'
+                . '</div>'
+                . '</div>';
         }
 
         $recordingForm = '';
         if ($unpaidAmount > 0.0001 || (string) ($payment['payment_status'] ?? '') !== 'paid') {
-            $recordingForm = '<hr>'
-                . '<h5 class="mb-3">登记收款（支持折扣抵扣）</h5>'
+            $recordingForm = '<div class="card border-primary shadow-sm my-4">'
+                . '<div class="card-header bg-primary text-white"><h5 class="mb-0">登记收款（支持折扣抵扣）</h5></div>'
+                . '<div class="card-body">'
                 . '<form method="POST" action="/payments/' . (int) ($payment['id'] ?? 0) . '/record">'
                 . '<input type="hidden" name="_token" value="' . csrf_token() . '">'
-                . '<div class="row g-2">'
-                . '<div class="col-md-3"><label class="form-label">实收金额</label><input class="form-control" type="number" step="0.01" min="0" name="amount_paid" value="' . number_format($amountPaid, 2, '.', '') . '" required></div>'
-                . '<div class="col-md-3"><label class="form-label">折扣/抵扣金额</label><input class="form-control" type="number" step="0.01" min="0" max="' . number_format($grossDue, 2, '.', '') . '" name="discount" value="' . number_format($discount, 2, '.', '') . '" required></div>'
-                . '<div class="col-md-3"><label class="form-label">支付方式</label><select class="form-select" name="payment_method">'
+                . '<div class="row g-3">'
+                . '<div class="col-md-6 col-lg-3"><label class="form-label">实收金额</label><input class="form-control" type="number" step="0.01" min="0" name="amount_paid" value="' . number_format($amountPaid, 2, '.', '') . '" required></div>'
+                . '<div class="col-md-6 col-lg-3"><label class="form-label">折扣/抵扣金额</label><input class="form-control" type="number" step="0.01" min="0" max="' . number_format($grossDue, 2, '.', '') . '" name="discount" value="' . number_format($discount, 2, '.', '') . '" required></div>'
+                . '<div class="col-md-6 col-lg-3"><label class="form-label">支付方式</label><select class="form-select" name="payment_method">'
                 . '<option value="bank_transfer"' . ($paymentMethod === 'bank_transfer' ? ' selected' : '') . '>银行转账</option>'
                 . '<option value="cash"' . ($paymentMethod === 'cash' ? ' selected' : '') . '>现金</option>'
                 . '<option value="alipay"' . ($paymentMethod === 'alipay' ? ' selected' : '') . '>支付宝</option>'
                 . '<option value="wechat_pay"' . ($paymentMethod === 'wechat_pay' ? ' selected' : '') . '>微信支付</option>'
                 . '<option value="other"' . ($paymentMethod === 'other' ? ' selected' : '') . '>其他</option>'
                 . '</select></div>'
-                . '<div class="col-md-3"><label class="form-label">抵扣来源</label><select class="form-select" name="discount_source"><option value=""' . ($discountSource === '' ? ' selected' : '') . '>无</option><option value="deposit_offset"' . ($discountSource === 'deposit_offset' ? ' selected' : '') . '>押金冲抵</option><option value="promotion"' . ($discountSource === 'promotion' ? ' selected' : '') . '>优惠减免</option><option value="bad_debt"' . ($discountSource === 'bad_debt' ? ' selected' : '') . '>坏账核销</option><option value="other"' . ($discountSource === 'other' ? ' selected' : '') . '>其他</option></select></div>'
-                . '<div class="col-md-3"><label class="form-label">本次结余参考</label><input class="form-control" value="¥' . number_format($unpaidAmount, 2) . '" disabled></div>'
-                . '<div class="col-12"><label class="form-label">备注</label><textarea class="form-control" name="notes" rows="2" placeholder="例如：押金冲抵、维修补贴抵扣等">' . htmlspecialchars($paymentNote, ENT_QUOTES) . '</textarea></div>'
-                . '<div class="col-12"><div class="small text-muted">结清规则：若 实收金额 + 折扣/抵扣金额 >= 应收合计，则账单状态更新为“已支付”。</div></div>'
-                . '<div class="col-12 d-grid"><button class="btn btn-primary" type="submit">保存收款记录</button></div>'
-                . '</div></form>';
+                . '<div class="col-md-6 col-lg-3"><label class="form-label">抵扣来源</label><select class="form-select" name="discount_source"><option value=""' . ($discountSource === '' ? ' selected' : '') . '>无</option><option value="deposit_offset"' . ($discountSource === 'deposit_offset' ? ' selected' : '') . '>押金冲抵</option><option value="promotion"' . ($discountSource === 'promotion' ? ' selected' : '') . '>优惠减免</option><option value="bad_debt"' . ($discountSource === 'bad_debt' ? ' selected' : '') . '>坏账核销</option><option value="other"' . ($discountSource === 'other' ? ' selected' : '') . '>其他</option></select></div>'
+                . '<div class="col-md-6"><label class="form-label">本次结余参考</label><input class="form-control" value="¥' . number_format($unpaidAmount, 2) . '" disabled></div>'
+                . '<div class="col-md-6"><label class="form-label">备注</label><textarea class="form-control" name="notes" rows="2" placeholder="例如：押金冲抵、维修补贴抵扣等">' . htmlspecialchars($paymentNote, ENT_QUOTES) . '</textarea></div>'
+                . '<div class="col-12"><div class="alert alert-light"><i class="bi bi-info-circle"></i> 结清规则：若 实收金额 + 折扣/抵扣金额 >= 应收合计，则账单状态更新为“已支付”。</div></div>'
+                . '<div class="col-12 d-grid"><button class="btn btn-primary btn-lg" type="submit">保存收款记录</button></div>'
+                . '</div></form>'
+                . '</div></div>';
         }
 
-        return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>支付收据</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css"></head><body>'
-            . '<div class="container mt-4"><div class="card"><div class="card-body">'
-            . '<h3 class="mb-3">租金支付收据</h3>'
-            . '<p><strong>支付编号：</strong>' . htmlspecialchars((string) $payment['payment_number']) . '</p>'
-            . '<p><strong>合同编号：</strong>' . htmlspecialchars((string) $payment['contract_number']) . '</p>'
-            . '<p><strong>租客姓名：</strong>' . htmlspecialchars((string) $payment['tenant_name']) . '</p>'
-            . '<p><strong>房产名称：</strong>' . htmlspecialchars((string) $payment['property_name']) . '</p>'
-            . '<p><strong>账单周期：</strong>' . htmlspecialchars((string) $payment['payment_period']) . '</p>'
-            . '<hr>'
-            . '<p><strong>应付金额：</strong>¥' . number_format((float) $payment['amount_due'], 2) . '</p>'
-            . '<p><strong>滞纳金：</strong>¥' . number_format((float) $payment['late_fee'], 2) . '</p>'
-            . '<p><strong>折扣：</strong>¥' . number_format((float) $payment['discount'], 2) . '</p>'
-            . (((float) $payment['discount'] > 0 && $discountSource !== '') ? '<p><strong>抵扣来源：</strong>' . htmlspecialchars($this->discountSourceLabel($discountSource), ENT_QUOTES) . '</p>' : '')
-            . '<p><strong>应收合计：</strong>¥' . number_format($totalDue, 2) . '</p>'
-            . '<p><strong>实收金额：</strong>¥' . number_format($amountPaid, 2) . '</p>'
-            . '<p><strong>未收余额：</strong>¥' . number_format($unpaidAmount, 2) . '</p>'
-            . '<p><strong>支付日期：</strong>' . htmlspecialchars((string) ($payment['paid_date'] ?? '-')) . '</p>'
-            . '<p><strong>状态：</strong>' . $this->paymentStatusBadge((string) $payment['payment_status']) . '</p>'
-            . $recordingForm
+        $pageStyles = '<style>
+            .receipt-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 1rem; }
+            .receipt-section { border-left: 4px solid #667eea; padding-left: 1rem; }
+            .print-only { display: none; }
+            @media print {
+                .no-print { display: none; }
+                .print-only { display: block; }
+                .card { border: none !important; box-shadow: none !important; }
+                .alert { border: 1px solid #dee2e6; }
+            }
+        </style>';
+
+        return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>支付收据</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css"><link rel="stylesheet" href="/assets/css/bootstrap-icons.css">'
+            . $pageStyles
+            . '</head><body class="bg-light">'
+            . '<div class="container py-4">'
+            . '<div class="receipt-header p-4 mb-4">'
+            . '<div class="row align-items-center">'
+            . '<div class="col-md-8">'
+            . '<h1 class="display-5 fw-bold">租金支付收据</h1>'
+            . '<p class="lead mb-0">支付编号：' . htmlspecialchars((string) $payment['payment_number']) . ' | 账单周期：' . htmlspecialchars((string) $payment['payment_period']) . '</p>'
+            . '</div>'
+            . '<div class="col-md-4 text-end">'
+            . '<div class="btn-group no-print">'
+            . '<a class="btn btn-light" href="/payments"><i class="bi bi-arrow-left"></i> 返回账单列表</a>'
+            . '<button class="btn btn-light" onclick="window.print()"><i class="bi bi-printer"></i> 打印收据</button>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '<div class="row">'
+            . '<div class="col-lg-8">'
+            . '<div class="card shadow-sm mb-4">'
+            . '<div class="card-header bg-white"><h5 class="mb-0"><i class="bi bi-info-circle"></i> 基本信息</h5></div>'
+            . '<div class="card-body">'
+            . '<div class="row">'
+            . '<div class="col-md-6"><p><strong>合同编号：</strong>' . htmlspecialchars((string) $payment['contract_number']) . '</p></div>'
+            . '<div class="col-md-6"><p><strong>租客姓名：</strong>' . htmlspecialchars((string) $payment['tenant_name']) . '</p></div>'
+            . '<div class="col-md-6"><p><strong>房产名称：</strong>' . htmlspecialchars((string) $payment['property_name']) . '</p></div>'
+            . '<div class="col-md-6"><p><strong>押金金额：</strong>¥' . number_format((float) ($payment['deposit_amount'] ?? 0), 2) . '</p></div>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
             . $formulaBlock
+            . $recordingForm
+            . '</div>'
+            . '<div class="col-lg-4">'
+            . '<div class="card shadow-sm mb-4">'
+            . '<div class="card-header bg-white"><h5 class="mb-0"><i class="bi bi-calculator"></i> 金额摘要</h5></div>'
+            . '<div class="card-body">'
+            . '<div class="receipt-section">'
+            . '<p><strong>应付金额：</strong> <span class="float-end">¥' . number_format((float) $payment['amount_due'], 2) . '</span></p>'
+            . '<p><strong>滞纳金：</strong> <span class="float-end">¥' . number_format((float) $payment['late_fee'], 2) . '</span></p>'
+            . '<p><strong>折扣：</strong> <span class="float-end text-danger">-¥' . number_format((float) $payment['discount'], 2) . '</span></p>'
+            . (((float) $payment['discount'] > 0 && $discountSource !== '') ? '<p><strong>抵扣来源：</strong> <span class="float-end">' . htmlspecialchars($this->discountSourceLabel($discountSource), ENT_QUOTES) . '</span></p>' : '')
+            . '<hr>'
+            . '<h5><strong>应收合计：</strong> <span class="float-end text-primary">¥' . number_format($totalDue, 2) . '</span></h5>'
+            . '<p><strong>实收金额：</strong> <span class="float-end text-success">¥' . number_format($amountPaid, 2) . '</span></p>'
+            . '<p><strong>未收余额：</strong> <span class="float-end text-danger">¥' . number_format($unpaidAmount, 2) . '</span></p>'
+            . '<hr>'
+            . '<p><strong>支付日期：</strong> <span class="float-end">' . htmlspecialchars((string) ($payment['paid_date'] ?? '-')) . '</span></p>'
+            . '<p><strong>状态：</strong> <span class="float-end">' . $this->paymentStatusBadge((string) $payment['payment_status']) . '</span></p>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '</div>'
+            . '<div class="text-center mt-4 no-print">'
+            . '<p class="text-muted"><small>本收据由 EasyRent 系统生成，仅供参考。如有疑问，请联系管理员。</small></p>'
+            . '</div>'
             . '<script>
             (function() {
                 const discountInput = document.querySelector(\'input[name="discount"]\');
@@ -4039,8 +4533,7 @@ class PaymentController
                 updateDiscount();
             })();
             </script>'
-            . '<div class="mt-3 d-flex gap-2"><a class="btn btn-secondary" href="/payments">返回账单列表</a><button class="btn btn-outline-primary" onclick="window.print()">打印收据</button></div>'
-            . '</div></div></div></body></html>';
+            . '</div></body></html>';
     }
 
     private function getMeterTypeDefinitions(): array

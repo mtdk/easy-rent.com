@@ -1,0 +1,1 @@
+ALTER TABLE `rent_payments` DROP COLUMN `bill_type`;

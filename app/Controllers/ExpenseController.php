@@ -595,10 +595,10 @@ class ExpenseController
 
         $alerts = '';
         if (has_flash('error')) {
-            $alerts .= '<div class="alert alert-danger">' . htmlspecialchars((string) flash('error')) . '</div>';
+            $alerts .= '<div class="alert alert-danger">' . htmlspecialchars((string) get_flash('error')) . '</div>';
         }
         if (has_flash('success')) {
-            $alerts .= '<div class="alert alert-success">' . htmlspecialchars((string) flash('success')) . '</div>';
+            $alerts .= '<div class="alert alert-success">' . htmlspecialchars((string) get_flash('success')) . '</div>';
         }
 
         return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>新增支出</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css"><link rel="stylesheet" href="/assets/css/bootstrap-icons.css">' . $navbarStyles . '</head><body>'
@@ -640,10 +640,10 @@ class ExpenseController
 
         $alerts = '';
         if (has_flash('error')) {
-            $alerts .= '<div class="alert alert-danger">' . htmlspecialchars((string) flash('error')) . '</div>';
+            $alerts .= '<div class="alert alert-danger">' . htmlspecialchars((string) get_flash('error')) . '</div>';
         }
         if (has_flash('success')) {
-            $alerts .= '<div class="alert alert-success">' . htmlspecialchars((string) flash('success')) . '</div>';
+            $alerts .= '<div class="alert alert-success">' . htmlspecialchars((string) get_flash('success')) . '</div>';
         }
 
         $rowsHtml = '';

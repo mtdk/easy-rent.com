@@ -72,7 +72,7 @@ function tenantShowTemplate($tenant, $cohabitants, $history) {
     
     $html .= '<div class="col-lg-4">';
     
-    // 共同居住人卡片
+    // 共同居住人卡片（详细信息）
     $html .= '<div class="card shadow-sm border-0">';
     $html .= '<div class="card-header bg-light d-flex justify-content-between align-items-center">';
     $html .= '<h5 class="mb-0"><i class="bi bi-people me-2"></i>共同居住人</h5>';
@@ -80,18 +80,34 @@ function tenantShowTemplate($tenant, $cohabitants, $history) {
     $html .= '</div>';
     $html .= '<div class="card-body pb-2">';
     if (!empty($cohabitants)) {
-        $html .= '<div class="table-responsive">';
-        $html .= '<table class="table table-sm table-borderless align-middle">';
-        $html .= '<thead class="bg-light"><tr><th>姓名</th><th>状态</th></tr></thead><tbody>';
+        $html .= '<div class="row g-3">';
         foreach ($cohabitants as $c) {
             $coStatus = $c['status'] ?? '在住';
             $coBadge = $coStatus === '在住' ? '<span class="badge bg-success">在住</span>' : '<span class="badge bg-secondary">迁出</span>';
-            $html .= '<tr>';
-            $html .= '<td>' . htmlspecialchars($c['name']) . '</td>';
-            $html .= '<td>' . $coBadge . '</td>';
-            $html .= '</tr>';
+            $html .= '<div class="col-12">';
+            $html .= '<div class="card border h-100">';
+            $html .= '<div class="card-header py-2 bg-light d-flex justify-content-between align-items-center">';
+            $html .= '<strong>' . htmlspecialchars($c['name']) . '</strong>';
+            $html .= $coBadge;
+            $html .= '</div>';
+            $html .= '<div class="card-body p-3">';
+            $html .= '<div class="row g-2">';
+            // 民族
+            $html .= '<div class="col-6"><small class="text-muted">民族</small><div class="fw-semibold">' . htmlspecialchars($c['nation'] ?? '') . '</div></div>';
+            // 性别
+            $html .= '<div class="col-6"><small class="text-muted">性别</small><div class="fw-semibold">' . htmlspecialchars($c['gender'] ?? '') . '</div></div>';
+            // 身份证号
+            $html .= '<div class="col-12"><small class="text-muted">身份证号</small><div class="fw-semibold text-truncate">' . htmlspecialchars($c['id_number'] ?? '') . '</div></div>';
+            // 电话
+            $html .= '<div class="col-12"><small class="text-muted">电话</small><div class="fw-semibold">' . htmlspecialchars($c['phone'] ?? '') . '</div></div>';
+            // 地址
+            $html .= '<div class="col-12"><small class="text-muted">地址</small><div class="fw-semibold small">' . htmlspecialchars($c['address'] ?? '') . '</div></div>';
+            $html .= '</div>';
+            $html .= '</div>'; // card-body
+            $html .= '</div>'; // card
+            $html .= '</div>'; // col
         }
-        $html .= '</tbody></table></div>';
+        $html .= '</div>'; // row
     } else {
         $html .= '<p class="text-muted text-center small py-3">暂无共同居住人</p>';
     }

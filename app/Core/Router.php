@@ -762,6 +762,8 @@ class Router
             $router->post('/admin/tenants/{tenantId}/cohabitants/save', 'TenantAdminController@saveCohabitant');
             $router->post('/admin/tenants/{tenantId}/cohabitants/{id}/delete', 'TenantAdminController@deleteCohabitant');
             $router->post('/admin/tenants/{tenantId}/cohabitants/{id}/moveout', 'TenantAdminController@moveOutCohabitant');
+            $router->get('/admin/tenants/{tenantId}/cohabitants/{id}/edit', 'TenantAdminController@editCohabitant');
+            $router->post('/admin/tenants/{tenantId}/cohabitants/{id}/update', 'TenantAdminController@updateCohabitant');
             $router->post('/admin/tenants/{id}/moveout', 'TenantAdminController@moveOut');
             $router->post('/admin/tenants/{id}/restore', 'TenantAdminController@restore');
             // 仪表板

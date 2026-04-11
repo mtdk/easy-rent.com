@@ -59,6 +59,7 @@ class ContractController
             throw HttpException::notFound('合同不存在或无权访问');
         }
         $this->assertContractManagePermission($contract);
+        $this->ensureContractNotTerminated($contract);
 
         $daysLeft = max(0, (int) floor((strtotime((string) $contract['end_date']) - strtotime(date('Y-m-d'))) / 86400));
         $priority = $daysLeft <= 7 ? 'high' : 'normal';
@@ -247,6 +248,7 @@ class ContractController
             throw HttpException::notFound('合同不存在或无权访问');
         }
         $this->assertContractManagePermission($contract);
+        $this->ensureContractNotTerminated($contract);
 
         $meterType = trim((string) ($_POST['meter_type'] ?? ''));
         $meterCode = trim((string) ($_POST['meter_code'] ?? ''));
@@ -293,7 +295,7 @@ class ContractController
             'meter_type' => $meterType,
             'meter_code' => $meterCode,
             'meter_name' => $meterName !== '' ? $meterName : null,
-            'default_unit_price' => number_format((float) $defaultUnitPriceRaw, 4, '.', ''),
+            'default_unit_price' => number_format((float) $defaultUnitPriceRaw, 2, '.', ''),
             'initial_reading' => number_format((float) $initialReadingRaw, 2, '.', ''),
             'is_active' => 1,
             'sort_order' => $sortOrder,
@@ -321,6 +323,7 @@ class ContractController
             throw HttpException::notFound('合同不存在或无权访问');
         }
         $this->assertContractManagePermission($contract);
+        $this->ensureContractNotTerminated($contract);
 
         $meter = db()->fetch(
             'SELECT id, contract_id FROM contract_meters WHERE id = ? LIMIT 1',
@@ -370,7 +373,7 @@ class ContractController
             'meter_type' => $meterType,
             'meter_code' => $meterCode,
             'meter_name' => $meterName !== '' ? $meterName : null,
-            'default_unit_price' => number_format((float) $defaultUnitPriceRaw, 4, '.', ''),
+            'default_unit_price' => number_format((float) $defaultUnitPriceRaw, 2, '.', ''),
             'initial_reading' => number_format((float) $initialReadingRaw, 2, '.', ''),
             'updated_at' => date('Y-m-d H:i:s'),
         ], ['id' => $meterId]);
@@ -395,6 +398,7 @@ class ContractController
             throw HttpException::notFound('合同不存在或无权访问');
         }
         $this->assertContractManagePermission($contract);
+        $this->ensureContractNotTerminated($contract);
 
         $meter = db()->fetch('SELECT id, contract_id, is_active FROM contract_meters WHERE id = ? LIMIT 1', [$meterId]);
         if (!$meter || (int) ($meter['contract_id'] ?? 0) !== $id) {
@@ -432,6 +436,7 @@ class ContractController
         }
 
         $this->assertContractManagePermission($contract);
+        $this->ensureContractNotTerminated($contract);
         $properties = $this->getPropertyOptions(auth()->user(), auth()->isAdmin());
         $tenants = db()->fetchAll('SELECT id, name, phone FROM tenants WHERE status = ? ORDER BY name', ['在住']);
 
@@ -498,6 +503,7 @@ class ContractController
             throw HttpException::notFound('合同不存在或无权访问');
         }
         $this->assertContractManagePermission($contract);
+        $this->ensureContractNotTerminated($contract);
 
         try {
             db()->delete('contracts', ['id' => $id]);
@@ -800,6 +806,13 @@ class ContractController
     {
         if (!auth()->isAdmin() && (int) ($contract['owner_id'] ?? 0) !== (int) auth()->id()) {
             throw HttpException::forbidden('您无权操作该合同');
+        }
+    }
+
+    private function ensureContractNotTerminated(array $contract): void
+    {
+        if ((string) ($contract['contract_status'] ?? '') === 'terminated') {
+            throw HttpException::badRequest('已终止合同不能进行编辑操作');
         }
     }
 
@@ -1151,7 +1164,7 @@ class ContractController
                 . '<td>' . htmlspecialchars($this->meterTypeLabel((string) ($meter['meter_type'] ?? '')), ENT_QUOTES) . '</td>'
                 . '<td>' . htmlspecialchars((string) ($meter['meter_code'] ?? ''), ENT_QUOTES) . '</td>'
                 . '<td>' . htmlspecialchars((string) ($meter['meter_name'] ?? '-'), ENT_QUOTES) . '</td>'
-                . '<td class="text-end">' . number_format((float) ($meter['default_unit_price'] ?? 0), 4) . '</td>'
+                . '<td class="text-end">' . number_format((float) ($meter['default_unit_price'] ?? 0), 2) . '</td>'
                 . '<td class="text-end">' . number_format((float) ($meter['initial_reading'] ?? 0), 2) . '</td>'
                 . '<td>' . $statusBadge . '</td>'
                 . '<td>' . $action . '</td>'
@@ -1187,7 +1200,7 @@ class ContractController
                 . '<div class="col-md-2"><label class="form-label">类型</label><select class="form-select" name="meter_type" required>' . $meterTypeOptions . '</select></div>'
                 . '<div class="col-md-3"><label class="form-label">表计编号</label><input class="form-control" name="meter_code" placeholder="如 WATER-2" required></div>'
                 . '<div class="col-md-3"><label class="form-label">表计名称</label><input class="form-control" name="meter_name" placeholder="可选"></div>'
-                . '<div class="col-md-2"><label class="form-label">默认单价</label><input class="form-control" type="number" step="0.0001" min="0" name="default_unit_price" value="0.0000" required></div>'
+                . '<div class="col-md-2"><label class="form-label">默认单价</label><input class="form-control" type="number" step="0.01" min="0" name="default_unit_price" value="0.00" required></div>'
                 . '<div class="col-md-2"><label class="form-label">初始读数</label><input class="form-control" type="number" step="0.01" min="0" name="initial_reading" value="0.00" required></div>'
                 . '<div class="col-12 d-grid"><button class="btn btn-outline-primary" type="submit">添加表计</button></div>'
                 . '</div></form></div></div>';
@@ -1226,13 +1239,27 @@ class ContractController
                     . '<div class="col-md-2"><label class="form-label">类型</label><select class="form-select" name="meter_type" required>' . $editTypeOptions . '</select></div>'
                     . '<div class="col-md-3"><label class="form-label">表计编号</label><input class="form-control" name="meter_code" value="' . htmlspecialchars((string) ($meter['meter_code'] ?? ''), ENT_QUOTES) . '" required></div>'
                     . '<div class="col-md-3"><label class="form-label">表计名称</label><input class="form-control" name="meter_name" value="' . htmlspecialchars((string) ($meter['meter_name'] ?? ''), ENT_QUOTES) . '" placeholder="可选"></div>'
-                    . '<div class="col-md-2"><label class="form-label">默认单价</label><input class="form-control" type="number" step="0.0001" min="0" name="default_unit_price" value="' . htmlspecialchars(number_format((float) ($meter['default_unit_price'] ?? 0), 4, '.', ''), ENT_QUOTES) . '" required></div>'
+                    . '<div class="col-md-2"><label class="form-label">默认单价</label><input class="form-control" type="number" step="0.01" min="0" name="default_unit_price" value="' . htmlspecialchars(number_format((float) ($meter['default_unit_price'] ?? 0), 2, '.', ''), ENT_QUOTES) . '" required></div>'
                     . '<div class="col-md-2"><label class="form-label">初始读数</label><input class="form-control" type="number" step="0.01" min="0" name="initial_reading" value="' . htmlspecialchars(number_format((float) ($meter['initial_reading'] ?? 0), 2, '.', ''), ENT_QUOTES) . '" required></div>'
                     . '<div class="col-12 d-grid d-md-flex justify-content-md-end"><button class="btn btn-primary" type="submit">保存表计修改</button></div>'
                     . '</div></form></div></div>';
             }
         }
 
+        // 合同状态为已终止时，仅显示最小信息
+        if ((string)($contract['contract_status'] ?? '') === 'terminated') {
+            return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>合同详情</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css"></head><body><div class="container mt-4">'
+                . '<h3>合同详情 #' . (int) $contract['id'] . '</h3><div class="card"><div class="card-body">'
+                . $alerts
+                . '<p><strong>合同编号：</strong>' . htmlspecialchars((string) $contract['contract_number']) . '</p>'
+                . '<p><strong>房产：</strong>' . htmlspecialchars((string) $contract['property_name']) . '</p>'
+                . '<p><strong>租客：</strong>' . htmlspecialchars((string) $contract['tenant_name']) . '</p>'
+                . '<p><strong>起止日期：</strong>' . htmlspecialchars((string) $contract['start_date']) . ' 至 ' . htmlspecialchars((string) $contract['end_date']) . '</p>'
+                . '<p><strong>状态：</strong>' . $this->statusBadge((string) $contract['contract_status']) . '</p>'
+                . '<div class="mt-3"><a class="btn btn-secondary" href="/contracts">返回列表</a></div>'
+                . '</div></div></div></body></html>';
+        }
+        // 其他状态，显示全部信息
         return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>合同详情</title><link rel="stylesheet" href="/assets/css/bootstrap.min.css"></head><body><div class="container mt-4">'
             . '<h3>合同详情 #' . (int) $contract['id'] . '</h3><div class="card"><div class="card-body">'
             . $alerts
@@ -1255,6 +1282,7 @@ class ContractController
                     <input type="hidden" name="_token" value="' . csrf_token() . '">
                     <button class="btn btn-outline-primary" type="submit">基于本合同续约</button>
                 </form>
+                <a class="btn btn-outline-warning" href="/payments/create?contract_id=' . (int) $contract['id'] . '&bill_type=checkout">退租结算</a>
                 <form action="/contracts/' . (int) $contract['id'] . '" method="POST" style="display:inline-block" onsubmit="return confirm(\'确认删除该合同吗？\')">
                     <input type="hidden" name="_method" value="DELETE">
                     <input type="hidden" name="_token" value="' . csrf_token() . '">

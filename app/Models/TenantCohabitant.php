@@ -19,6 +19,11 @@ class TenantCohabitant
         return db()->update('tenant_cohabitants', $data, ['id' => $id]);
     }
 
+    public static function findById($id)
+    {
+        return db()->fetch('SELECT * FROM tenant_cohabitants WHERE id = ?', [$id]);
+    }
+
     public static function delete($id)
     {
         return db()->delete('tenant_cohabitants', ['id' => $id]);

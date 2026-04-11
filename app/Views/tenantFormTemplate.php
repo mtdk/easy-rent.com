@@ -4,9 +4,14 @@ function tenantFormTemplate($title, $action, $method, $tenant = [], $cohabitants
     $isEdit = !empty($tenant['id']);
     $csrf = function_exists('csrf_token') ? csrf_token() : '';
     $status = $tenant['status'] ?? '在住';
-    $statusBadge = $status === '在住' 
-        ? '<span class="badge bg-success">在住</span>' 
+    $statusBadge = $status === '在住'
+        ? '<span class="badge bg-success">在住</span>'
         : '<span class="badge bg-secondary">迁出</span>';
+    
+    // 新建租户时设置默认入住日期
+    if (!$isEdit) {
+        $tenant['move_in_date'] = $tenant['move_in_date'] ?? date('Y-m-d');
+    }
     
     $fields = [
         ['name' => 'name', 'label' => '姓名', 'type' => 'text'],
@@ -16,6 +21,11 @@ function tenantFormTemplate($title, $action, $method, $tenant = [], $cohabitants
         ['name' => 'phone', 'label' => '电话', 'type' => 'text'],
         ['name' => 'address', 'label' => '户籍地址', 'type' => 'text'],
     ];
+    
+    // 新建租户时添加入住日期字段
+    if (!$isEdit) {
+        $fields[] = ['name' => 'move_in_date', 'label' => '入住日期', 'type' => 'date'];
+    }
     
     $form = '';
     $form .= '<div class="row">';
@@ -92,6 +102,10 @@ function tenantFormTemplate($title, $action, $method, $tenant = [], $cohabitants
         if ($status === '在住') {
             $form .= '<form method="POST" action="' . htmlspecialchars($action) . '/moveout" onsubmit="return confirm(\'确认将该租户及其共同居住人全部迁出？\')">';
             $form .= '<input type="hidden" name="_token" value="' . $csrf . '">';
+            $form .= '<div class="mb-3">';
+            $form .= '<label class="form-label small">迁出日期</label>';
+            $form .= '<input type="date" name="move_out_date" class="form-control" value="' . date('Y-m-d') . '">';
+            $form .= '</div>';
             $form .= '<button class="btn btn-warning w-100 mb-2"><i class="bi bi-box-arrow-right me-1"></i>迁出租户</button>';
             $form .= '<p class="text-muted small">租户迁出后，其所有共同居住人也将被标记为迁出，并结束当前入住记录。</p>';
             $form .= '</form>';
@@ -156,6 +170,7 @@ function tenantFormTemplate($title, $action, $method, $tenant = [], $cohabitants
                 $form .= '<td>' . htmlspecialchars($c['name']) . '</td>';
                 $form .= '<td>' . $coBadge . '</td>';
                 $form .= '<td class="text-nowrap">';
+                $form .= '<a href="/admin/tenants/' . (int)$tenant['id'] . '/cohabitants/' . (int)$c['id'] . '/edit" class="btn btn-xs btn-outline-primary btn-sm me-1" title="编辑"><i class="bi bi-pencil"></i></a>';
                 if ($coStatus === '在住') {
                     $form .= '<form method="POST" action="/admin/tenants/' . (int)$tenant['id'] . '/cohabitants/' . (int)$c['id'] . '/moveout" style="display:inline">';
                     $form .= '<input type="hidden" name="_token" value="' . $csrf . '">';
