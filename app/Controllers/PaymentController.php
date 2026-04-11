@@ -2902,10 +2902,6 @@ class PaymentController
         }
 
         $totalPaidRate = $sumBills > 0 ? round(($sumPaidCount / $sumBills) * 100, 2) : 0;
-        $trendSvg = $this->buildReconciliationTrendSvg($trendRows, $filters);
-        $trendCardHtml = $liteMode
-            ? '<div class="alert alert-secondary py-2 no-print">弱网优先模式已开启：趋势图已折叠，保留核心对账数据。</div>'
-            : '<div class="card mb-3 trend-card"><div class="card-body"><div class="d-flex justify-content-between align-items-center mb-2"><h5 class="mb-0">近12个月趋势</h5><small class="text-muted">蓝线=应收，绿线=实收，红线=未收（可点击月份钻取）</small></div>' . $trendSvg . '</div></div>';
         $summaryRef = $this->buildReconciliationSummaryRef($keyword, $periodFrom, $periodTo, $unpaidOnly, $sortBy, $sortDir, $sumBills, $sumReceivable, $sumReceived, $sumUnpaid);
         $queryString = http_build_query([
             'keyword' => $keyword,
@@ -3101,8 +3097,7 @@ class PaymentController
             . '</div>'
             . '</div>'
             . '</div>'
-            // 趋势图
-            . $trendCardHtml
+            // ...已移除趋势图...
             // 主对账表格
             . '<div class="card reconciliation-table-card">'
             . '<div class="card-header d-flex justify-content-between align-items-center"><h5 class="mb-0"><i class="bi bi-calendar-check me-2"></i>月度对账明细</h5><small class="text-muted">点击表头可排序，点击未收金额可钻取</small></div>'
